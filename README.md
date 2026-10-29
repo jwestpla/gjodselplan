@@ -31,14 +31,28 @@ The script makes a build venv (`.venv-build`), installs the pinned versions in
 (`tools/make_demo_db.py`), runs PyInstaller with `gjodselplan.spec`, checks the
 bundle (`tools/check_bundle.py`: demo data only, all reference files), runs
 `Gjodselplan.exe --selftest` in an empty data folder, and zips the result to
-`dist/Gjodselplan-<version>-windows.zip`. Put that zip next to `site/index.html`
-on the website (update the file name in the download link when the version changes).
+`dist/Gjodselplan-<version>-windows.zip`.
 
-No Windows PC? Push the repo to GitHub and run the workflow **Windows-bygg**
-(`.github/workflows/windows-build.yml`) from the Actions tab. It builds on
-`windows-latest`, removes Python from PATH, unpacks the zip and runs the
-selftest twice (first start in `%APPDATA%\Gjodselplan`, then a normal start).
-The zip is attached to the run as an artifact.
+No Windows PC? Run the workflow **Windows-bygg** (`.github/workflows/windows-build.yml`)
+from the Actions tab. It builds on `windows-latest`, removes Python from PATH,
+unpacks the zip and runs the selftest twice (first start in
+`%APPDATA%\Gjodselplan`, then a normal start). The zip is attached to the run
+as an artifact.
+
+### Publishing a version for reviewers
+
+The repo is public; the reviewer needs no GitHub account.
+
+1. Set the version in `gjodsel/__init__.py` (e.g. `0.1.1`), commit and push.
+2. `git tag v0.1.1 && git push origin v0.1.1`
+3. The workflow builds, tests and publishes a GitHub Release with
+   `Gjodselplan-windows.zip` (fixed name). It stops if the tag and
+   `__version__` don't match.
+4. The download page `docs/index.html` is served by GitHub Pages
+   (Settings → Pages → branch `main`, folder `/docs`) at
+   <https://jwestpla.github.io/gjodselplan/>. Its button links to
+   `releases/latest/download/Gjodselplan-windows.zip`, so it always gives the
+   newest release without editing the page.
 
 Details:
 

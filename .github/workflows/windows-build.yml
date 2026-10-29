@@ -1,11 +1,15 @@
 # Builds the Windows version and tests the exe with Python removed from PATH.
-# Run it from the Actions tab ("Run workflow") or by pushing a tag like v0.1.0.
+# Run it from the Actions tab ("Run workflow") for a test build, or push a tag like
+# v0.1.0 to also publish a GitHub Release with Gjodselplan-windows.zip.
 name: Windows-bygg
 
 on:
   workflow_dispatch:
   push:
     tags: ["v*"]
+
+permissions:
+  contents: write  # needed to create the Release on tag pushes
 
 jobs:
   build:
@@ -52,3 +56,26 @@ jobs:
         with:
           name: Gjodselplan-windows
           path: dist/Gjodselplan-*-windows.zip
+
+      - name: Publiser GitHub-release (bare ved tag v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = (Get-Content build\version.txt -Raw).Trim()
+          $tag = $env:GITHUB_REF_NAME
+          if ("v$version" -ne $tag) { throw "Taggen $tag passer ikke med __version__ i gjodsel/__init__.py ($version)" }
+          # Fixed asset name, so .../releases/latest/download/Gjodselplan-windows.zip always gives the newest version
+          $zip = Get-ChildItem dist\Gjodselplan-*-windows.zip | Select-Object -First 1
+          Copy-Item $zip.FullName dist\Gjodselplan-windows.zip
+          $name = $env:GITHUB_REPOSITORY.Split('/')[1]
+          $notes = (Get-Content .github\release-notes.md -Raw -Encoding utf8).Replace('{TAG}', $tag).Replace('{REPO}', $env:GITHUB_REPOSITORY).Replace('{OWNER}', $env:GITHUB_REPOSITORY_OWNER).Replace('{NAME}', $name)
+          $notesFile = Join-Path $env:RUNNER_TEMP "release-notes.md"
+          Set-Content -Path $notesFile -Value $notes -Encoding utf8
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag dist\Gjodselplan-windows.zip --clobber
+          } else {
+            gh release create $tag dist\Gjodselplan-windows.zip --title "Gjødselplan $version" --notes-file $notesFile
+          }

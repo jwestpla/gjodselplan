@@ -5,8 +5,8 @@
 ## Status
 - Phases 0–7 built (the user said "just continue", so they ran back to back).
 - Reviewer release (v0.1.0): Windows build (PyInstaller one-folder), demo data, feedback, Referansedata review tab,
-  tools/merge_review.py, site/index.html. The Windows exe itself is untested by Claude (built and selftested on
-  macOS only); `.github/workflows/windows-build.yml` does the Windows clean-PATH test.
+  tools/merge_review.py, docs/index.html (GitHub Pages). Tested on Windows by the user.
+- Sharing: public repo jwestpla/gjodselplan; pushing a v* tag publishes a Release with Gjodselplan-windows.zip. `.github/workflows/windows-build.yml` does the Windows clean-PATH test.
 - The schema is frozen since Phase 1: ask before changing it, and write a migration.
 - Not started (PLAN §10 "Later", ask first): map view, lab report import, liming, fertigation split, Ldir export.
 
