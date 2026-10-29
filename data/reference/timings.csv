@@ -1,0 +1,8 @@
+﻿code;label_nb;season;sort
+tidlig_vaar;Tidlig vår;vaar;1
+etter_planting;Etter planting;vaar;2
+for_blomstring;2 uker før blomstring;vaar;3
+etter_blomstring;Etter blomstring;sommer_host;4
+6u_etter_planting;6 uker etter planting;sommer_host;5
+vekstsesong;I vekstsesongen;sommer_host;6
+etter_hosting;Etter høsting;sommer_host;7

@@ -1,0 +1,23 @@
+__pycache__/
+.DS_Store
+*.pyc
+.pytest_cache/
+.venv/
+
+# Client data – personal data, never commit
+data/gjodselplan.db
+data/gjodselplan.db-journal
+data/attachments/
+data/backups/
+data/export/
+
+# Build output
+build/
+dist/
+.venv-build/
+
+# Review and feedback files (come back from reviewers in Gjennomgang_*.zip)
+data/feedback.csv
+data/review_status.csv
+data/reference_changes.csv
+data/*.log

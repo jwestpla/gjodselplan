@@ -1,0 +1,7 @@
+mold_min;mold_max;n_adj;source
+0;3;2;NIBIO GH N-korreksjon
+3;4,5;1;NIBIO GH N-korreksjon
+4,5;12,5;0;NIBIO GH N-korreksjon
+12,5;20,5;-1;NIBIO GH N-korreksjon
+20,5;40,5;-2;NIBIO GH N-korreksjon
+40,5;100;-3;NIBIO GH N-korreksjon

@@ -1,0 +1,9 @@
+﻿pal_min;pal_max;pct;source
+0;1,5;100;NIBIO GH tab.2 (2012)
+1,5;2,5;75;NIBIO GH tab.2
+2,5;3,5;50;NIBIO GH tab.2
+3,5;4,5;25;NIBIO GH tab.2
+4,5;9,5;0;NIBIO GH tab.2
+9,5;13,5;-25;NIBIO GH tab.2
+13,5;15,5;-50;NIBIO GH tab.2
+15,5;999;-75;NIBIO GH tab.2

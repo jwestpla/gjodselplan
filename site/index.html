@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="nb">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gjødselplan for frukt – testversjon</title>
+<meta name="description" content="Last ned testversjonen av Gjødselplan for frukt for Windows, og gi tilbakemelding.">
+<style>
+  :root {
+    --bg: #f7f6f2;
+    --card: #ffffff;
+    --text: #1f2a1f;
+    --muted: #5b665b;
+    --accent: #2e7d32;
+    --accent-text: #ffffff;
+    --border: #dcdcd2;
+    --note-bg: #fff7d6;
+    --note-border: #e6cf6a;
+    --kbd-bg: #eef0ea;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151a15;
+      --card: #1d241d;
+      --text: #e8ece6;
+      --muted: #a9b3a7;
+      --accent: #66bb6a;
+      --accent-text: #0e140e;
+      --border: #334033;
+      --note-bg: #2f2a14;
+      --note-border: #7a6a24;
+      --kbd-bg: #2a332a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 17px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 2rem; line-height: 1.2; margin: 0 0 8px; }
+  h2 { font-size: 1.3rem; margin: 40px 0 12px; }
+  p { margin: 0 0 12px; }
+  .lead { color: var(--muted); font-size: 1.1rem; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    margin: 24px 0;
+  }
+  .download {
+    display: inline-block;
+    background: var(--accent);
+    color: var(--accent-text);
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 1.1rem;
+    padding: 14px 22px;
+    border-radius: 10px;
+  }
+  .download:focus-visible, a:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+  .small { color: var(--muted); font-size: 0.95rem; margin-top: 10px; }
+  ol.steps { padding-left: 0; list-style: none; counter-reset: step; margin: 0; }
+  ol.steps > li {
+    counter-increment: step;
+    position: relative;
+    padding: 0 0 18px 52px;
+  }
+  ol.steps > li::before {
+    content: counter(step);
+    position: absolute;
+    left: 0;
+    top: -2px;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: var(--accent-text);
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .note {
+    background: var(--note-bg);
+    border: 1px solid var(--note-border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin: 16px 0;
+  }
+  .ui {
+    background: var(--kbd-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1px 7px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  ul { padding-left: 22px; }
+  li { margin-bottom: 6px; }
+  code { font-family: ui-monospace, Consolas, monospace; font-size: 0.95em; overflow-wrap: anywhere; }
+  footer { margin-top: 48px; color: var(--muted); font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Gjødselplan for frukt</h1>
+  <p class="lead">Testversjon for gjennomgang. Programmet lager gjødslingsplan og gjødseljournal for fruktdyrkere
+    etter gjødselbrukforskriften, og regner ut behovet for nitrogen, fosfor og kalium per skifte.</p>
+
+  <div class="card">
+    <a class="download" href="Gjodselplan-0.1.0-windows.zip" download>Last ned for Windows (versjon 0.1.0)</a>
+    <p class="small">Zip-fil. Krever Windows 10 eller 11. Du trenger ikke installere noe annet.</p>
+  </div>
+
+  <h2>Slik kommer du i gang</h2>
+  <ol class="steps">
+    <li><strong>Last ned zip-filen</strong> med knappen over. Hvis nettleseren sier at filen sjelden lastes ned,
+      klikker du på <span class="ui">…</span> ved siden av filen og velger <span class="ui">Behold</span>.</li>
+    <li><strong>Pakk ut filen.</strong> Åpne mappen <em>Nedlastinger</em>, høyreklikk på
+      <code>Gjodselplan-0.1.0-windows.zip</code> og velg <span class="ui">Pakk ut alle…</span> og deretter
+      <span class="ui">Pakk ut</span>. Ikke start programmet direkte fra zip-filen – det virker ikke.</li>
+    <li><strong>Start programmet.</strong> Åpne den utpakkede mappen <em>Gjodselplan</em> og dobbeltklikk på
+      <code>Gjodselplan</code> (filtypen er «Program»). Første gang kan Windows vise en advarsel – se under.</li>
+  </ol>
+
+  <h2>Hvis Windows sier «Windows beskyttet PC-en din»</h2>
+  <p>Programmet er nytt og ikke signert hos Microsoft, så Windows SmartScreen kan stoppe det første gang.
+    Det betyr ikke at noe er galt med filen.</p>
+  <ol>
+    <li>Klikk på <span class="ui">Mer info</span> (den lille lenken i teksten).</li>
+    <li>Klikk på knappen <span class="ui">Kjør likevel</span> som dukker opp nederst.</li>
+  </ol>
+  <p>Du får bare spørsmålet første gang.</p>
+
+  <h2>Dette ser du når programmet starter</h2>
+  <ul>
+    <li>Et oppdiktet demoforetak, <strong>Testgård</strong>, med fire skifter (eple, ny planting, plomme og morell),
+      jordprøver og et utkast til gjødslingsplan.</li>
+    <li>Fanen <strong>Gjødslingsplan</strong> viser behovet per skifte og hvordan det er regnet ut.</li>
+    <li>Fanen <strong>Referansedata</strong> viser normtallene beregningen bygger på. Gule rader er verdier som må
+      vurderes.</li>
+  </ul>
+  <div class="note">Legg ikke inn opplysninger om ekte kunder i testversjonen. Bruk demodataene eller dikt opp
+    egne eksempler.</div>
+
+  <h2>Slik gir du tilbakemelding</h2>
+  <ol>
+    <li><strong>Underveis:</strong> klikk på <span class="ui">Gi tilbakemelding</span> nede til venstre i
+      programmet. Velg hvilken fane det gjelder, skriv kommentaren og lagre. Du kan gjøre dette så ofte du vil.</li>
+    <li><strong>Normtallene:</strong> i fanen <span class="ui">Referansedata</span> velger du en rad og setter
+      vurderingen til <em>Godkjent</em>, <em>Endret</em> eller <em>Uenig</em>, gjerne med en kommentar.
+      Du kan også dobbeltklikke på et tall for å endre det. Telleren øverst viser hvor mange verdier du har
+      vurdert.</li>
+    <li><strong>Når du er ferdig:</strong> klikk på <span class="ui">Lag gjennomgangspakke</span> i fanen
+      Referansedata. Programmet lager en zip-fil i mappen <em>Dokumenter</em> og åpner mappen. Klikk deretter på
+      <span class="ui">Send tilbakemelding</span> – e-posten åpnes med riktig adresse. Legg ved zip-filen og send.</li>
+  </ol>
+  <p>Bruker du e-post i nettleseren (for eksempel Gmail eller Outlook på nett), åpnes kanskje ikke e-posten av seg
+    selv. Programmet kopierer da adressen for deg, så du kan lime den inn i en ny e-post.</p>
+
+  <h2>Hvor lagres dataene?</h2>
+  <p>Alt du gjør i programmet lagres på din egen PC, i mappen <code>%APPDATA%\Gjodselplan</code>. Du finner den
+    raskt via menyen <span class="ui">Fil</span> → <span class="ui">Åpne datamappen</span>. Ingenting sendes
+    automatisk noe sted.</p>
+
+  <h2>Fjerne programmet</h2>
+  <p>Slett mappen <em>Gjodselplan</em> du pakket ut. Vil du også fjerne dataene, sletter du mappen
+    <code>%APPDATA%\Gjodselplan</code> (lim inn i adressefeltet i Utforsker).</p>
+
+  <footer>Gjødselplan for frukt · testversjon 0.1.0</footer>
+</main>
+</body>
+</html>

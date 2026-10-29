@@ -1,0 +1,4 @@
+﻿growth_class;label_nb;n_adj;source
+lt20;Nyvekst < 20 cm;1,0;ANTATT
+20to40;Nyvekst 20–40 cm;0,0;ANTATT
+gt40;Nyvekst > 40 cm;-1,0;ANTATT

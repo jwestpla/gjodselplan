@@ -1,0 +1,2 @@
+pytest>=7.0
+reportlab>=4.0  # PDF export, from phase 5

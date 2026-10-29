@@ -1,0 +1,5 @@
+# Exact versions for the Windows build (tested: PyInstaller 6.22.3 on Python 3.11).
+reportlab==5.1.0
+pillow==13.0.0
+pytest==9.1.1
+pyinstaller==6.22.3

@@ -1,0 +1,54 @@
+# Builds the Windows version and tests the exe with Python removed from PATH.
+# Run it from the Actions tab ("Run workflow") or by pushing a tag like v0.1.0.
+name: Windows-bygg
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Bygg (tester, demodata, PyInstaller, selvtest, zip)
+        shell: cmd
+        run: build_windows.bat
+
+      - name: Selvtest uten Python på PATH
+        shell: pwsh
+        run: |
+          $env:PATH = ($env:PATH -split ';' | Where-Object { $_ -and $_ -notmatch '(?i)python|hostedtoolcache|\.venv|WindowsApps' }) -join ';'
+          $env:PYTHONHOME = $null
+          $env:PYTHONPATH = $null
+          $found = $true
+          try { & python -c "import sys" 2>$null; $found = ($LASTEXITCODE -eq 0) } catch { $found = $false }
+          if ($found) { throw "Python er fortsatt tilgjengelig på PATH" }
+          Write-Host "Python er ikke på PATH."
+
+          # Unpack the zip that will be published, like a reviewer would
+          $zip = Get-ChildItem dist\Gjodselplan-*-windows.zip | Select-Object -First 1
+          $target = Join-Path $env:RUNNER_TEMP "utpakket"
+          Expand-Archive $zip.FullName -DestinationPath $target
+          $exe = Join-Path $target "Gjodselplan\Gjodselplan.exe"
+
+          # 1) Default data location: %APPDATA%\Gjodselplan (first start, demo data)
+          $p = Start-Process -FilePath $exe -ArgumentList "--selftest" -Wait -PassThru
+          Get-Content (Join-Path $env:APPDATA "Gjodselplan\selftest.log")
+          if ($p.ExitCode -ne 0) { throw "Selvtest feilet ($($p.ExitCode))" }
+          if (Get-ChildItem (Join-Path $target "Gjodselplan") -Filter *.db -File) { throw "Database ved siden av exe" }
+          if (-not (Test-Path (Join-Path $env:APPDATA "Gjodselplan\reference\cultures.csv"))) { throw "Referansedata ble ikke kopiert" }
+
+          # 2) Second start uses the existing data
+          $p = Start-Process -FilePath $exe -ArgumentList "--selftest" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Andre start feilet ($($p.ExitCode))" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Gjodselplan-windows
+          path: dist/Gjodselplan-*-windows.zip
