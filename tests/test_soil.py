@@ -181,5 +181,5 @@ def test_foreign_sample_needs_pdf_report(conn, farm):
         repo.save_soil_sample(conn, SoilSample(**{**foreign.__dict__, "attachment": "attachments/1/rapport.png"}))
     saved = repo.save_soil_sample(conn, SoilSample(**{**foreign.__dict__, "attachment": "attachments/1/Rapport.PDF"}))
     assert saved.origin == "utenlandsk"
-    with pytest.raises(ValidationError, match="norsk eller utenlandsk"):
+    with pytest.raises(ValidationError, match="Standardpakke 1 eller Utvidet analyse"):
         repo.save_soil_sample(conn, SoilSample(enterprise_id=e.id, sample_date="2025-04-01", origin="svensk"))

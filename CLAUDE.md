@@ -53,8 +53,15 @@
   review_status has one row per (file, row_key); row keys are codes/stages/bands (`reference_review.row_key`).
   Band edits rename the key; save_session moves the review entry. Edited rows get status "Endret" automatically.
 - "X av Y vurdert": Y = rows with ANTATT/SJEKK ETIKETT source or with any review entry.
-- Foreign soil samples (origin 'utenlandsk') must have a PDF attachment; pdf_export appends those PDFs (pypdf,
-  approved dependency) for samples linked to fields in the plan. Origin is separate from method (AL/annet).
+- Soil sample origin: UI labels "Standardpakke 1" ('norsk') and "Utvidet analyse" ('utenlandsk'), `models.SOIL_ORIGIN_LABELS`.
+  Origin is separate from method (AL/annet). Lab report PDFs of samples linked to fields in the plan are appended to the
+  plan PDF (pypdf, approved dependency): required for Utvidet analyse, optional for Standardpakke 1. One report
+  (often one PDF for the whole farm) can serve many samples (`repo.share_soil_report`, "Gjenbruk" in the dialog);
+  it is appended once (deduplicated by file content). Non-PDF reports are listed as not attached.
+- Kartskisse PDFs are inserted as pages right after the property's Kartskisse heading (pypdf merge after build);
+  the "Side x av y" footer counts inserted and appended pages. Unreadable/encrypted map PDFs print "KART MANGLER".
+- Plan PDF: Jordanalyser and Innkjøpsliste each on their own page; the journal form is one page per field
+  (15 empty rows). § 27 journal: one page per field, then a "Sum for foretaket" page with a per-field summary.
 - One soil sample → many fields via field_soil_sample links (no duplicating results). After linking, the soil tab
   offers to switch draft-plan seasons that have no valid / an older sample (`plan_service.sample_plan_updates`).
 - Coordinates: Google Maps in the browser + paste (`geo.parse_coordinates`, `ui/coordinates.py`), no API key, no

@@ -1,3 +1,3 @@
 """Gjødselplan for frukt – fertilizer plans and journals for fruit advisors."""
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"

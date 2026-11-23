@@ -378,6 +378,15 @@ def set_soil_sample_attachment(conn: sqlite3.Connection, sample_id: int, relativ
         )
 
 
+def share_soil_report(conn: sqlite3.Connection, sample_ids: list[int], relative_path: str) -> None:
+    """Use one lab report (e.g. one PDF for the whole farm) for several samples."""
+    with transaction(conn):
+        conn.executemany(
+            "UPDATE soil_sample SET attachment = ?, updated_at = ? WHERE id = ?",
+            [(relative_path, now_iso(), sid) for sid in sample_ids],
+        )
+
+
 def delete_soil_sample(conn: sqlite3.Connection, sample_id: int) -> None:
     with transaction(conn):
         if soil_sample_in_use(conn, sample_id):

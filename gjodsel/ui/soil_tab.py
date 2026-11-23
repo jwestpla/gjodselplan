@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from .. import plan_service as ps
 from .. import repo
 from ..attachments import open_path, resolve, store_attachment
-from ..models import SOIL_METHODS, SoilSample
+from ..models import SOIL_METHODS, SOIL_ORIGIN_LABELS, SoilSample
 from ..soil import P_AL_UNIT_P, P_AL_UNIT_P2O5, P_AL_UNITS, SOIL_PARAMETERS, classify, p_al_to_element, sample_validity
 from ..units import format_date, format_plain, parse_date, round_half_up
 from ..validation import ValidationError
@@ -97,7 +97,7 @@ class SoilTab(ttk.Frame):
                     values.append(text + _MARKERS[classify(value, optimum.get(key))])
                 self.tree.insert("", "end", iid=str(s.id), tags=(tag,) if tag else (), values=(
                     format_date(s.sample_date), s.label or "", s.lab or "",
-                    s.method + (" · utl." if s.origin == "utenlandsk" else ""), *values,
+                    s.method + (" · utvidet" if s.origin == "utenlandsk" else ""), *values,
                     ", ".join(field_nos) or "ingen", "ok" if s.lat is not None else "mangler",
                     status, "ja" if s.attachment else "",
                 ))
@@ -167,8 +167,29 @@ class SoilTab(ttk.Frame):
     def _edit(self, s: SoilSample) -> None:
         dialog = SoilSampleDialog(self, self.app, s)
         if dialog.show():
+            if dialog.new_report:
+                self._offer_shared_report(dialog.saved_id, dialog.new_report)
             self.app.data_changed()
             self._offer_plan_update(dialog.saved_id)
+
+    def _offer_shared_report(self, sample_id: int | None, relative: str) -> None:
+        """A lab report often covers the whole farm: offer it for the other samples from the same analysis."""
+        s = repo.get_soil_sample(self.app.conn, sample_id) if sample_id is not None else None
+        if s is None or not relative.lower().endswith(".pdf"):
+            return
+        others = [x for x in repo.list_soil_samples(self.app.conn, s.enterprise_id)
+                  if x.id != s.id and not x.attachment and (
+                      x.sample_date == s.sample_date or (s.lab_report_no and x.lab_report_no == s.lab_report_no))]
+        if not others:
+            return
+        names = "\n".join(f"• {format_date(x.sample_date)} {x.label or ''}".rstrip() for x in others)
+        if messagebox.askyesno(
+            "Samme rapport for flere prøver",
+            f"Gjelder rapporten {Path(relative).name} også disse prøvene (samme dato eller rapportnr.)?\n\n{names}\n\n"
+            "Rapporten legges uansett bare én gang ved gjødslingsplanen.",
+            parent=self,
+        ):
+            repo.share_soil_report(self.app.conn, [x.id for x in others], relative)
 
     def choose_fields(self) -> None:
         """Use one sample (one lab analysis) for several fields."""
@@ -222,10 +243,11 @@ class SoilTab(ttk.Frame):
         if not filename:
             return
         if s.origin == "utenlandsk" and not filename.lower().endswith(".pdf"):
-            show_errors(self, ["Utenlandske jordprøver må ha rapporten som PDF (den legges ved planen)."], "Rapport")
+            show_errors(self, ["Utvidet analyse må ha rapporten som PDF (den legges ved planen)."], "Rapport")
             return
         relative = store_attachment(self.app.paths.data_dir, s.enterprise_id, Path(filename))
         repo.set_soil_sample_attachment(self.app.conn, s.id, relative)
+        self._offer_shared_report(s.id, relative)
         self.app.data_changed()
         self.app.set_status(f"Rapport lagret som {relative}.")
 
@@ -253,8 +275,10 @@ class SoilSampleDialog(EditDialog):
         self.app = app
         self.sample = sample
         self._report_source: Path | None = None  # PDF picked in this dialog, copied on save
+        self._report_reuse: str | None = None  # or a report already in the attachments folder
+        self.new_report: str | None = None  # set on save when the sample got a different report
         f = self.form
-        f.combo("origin", "Laboratorium *", [("norsk", "Norsk lab"), ("utenlandsk", "Utenlandsk lab")], width=16)
+        f.combo("origin", "Analyse *", list(SOIL_ORIGIN_LABELS.items()), width=16)
         f.var("origin").trace_add("write", lambda *_: self._update_report_hint(origin_changed=True))
         f.entry("sample_date", "Prøvedato * (dd.mm.åååå)", width=12)
         f.entry("label", "Merking (som på rapporten)")
@@ -264,6 +288,14 @@ class SoilSampleDialog(EditDialog):
         self.report_name = ttk.Label(report, text="", width=24)
         self.report_name.pack(side="left")
         ttk.Button(report, text="Velg PDF…", command=self._choose_report).pack(side="left", padx=(6, 0))
+        existing = self._existing_reports()
+        if existing:
+            reuse = ttk.Menubutton(report, text="Gjenbruk ▾")
+            menu = tk.Menu(reuse, tearoff=False)
+            for relative, label in existing:
+                menu.add_command(label=label, command=lambda r=relative: self._reuse_report(r))
+            reuse.configure(menu=menu)
+            reuse.pack(side="left", padx=(6, 0))
         f.custom("report", "Analyserapport", report)
         self.report_hint = ttk.Label(f, text="", wraplength=300, justify="left", foreground="#666666")
         f.custom("report_hint", "", self.report_hint)
@@ -301,11 +333,14 @@ class SoilSampleDialog(EditDialog):
     def _update_report_hint(self, origin_changed: bool = False) -> None:
         foreign = self.form.get("origin") == "utenlandsk"
         self.report_hint.configure(
-            text="Påkrevd for utenlandsk lab: PDF-en legges ved bakerst i gjødslingsplanen. Verdiene brukes bare i "
-                 "beregningen hvis metoden er AL." if foreign else "Valgfritt for norsk lab (legges ikke ved planen).",
-            foreground=AMBER if foreign and not (self._report_source or self.sample.attachment) else "#666666")
+            text="Påkrevd for utvidet analyse: PDF-en legges ved bakerst i gjødslingsplanen. Verdiene brukes bare i "
+                 "beregningen hvis metoden er AL." if foreign
+            else "Valgfritt for Standardpakke 1: lab-rapporten (PDF), gjerne én for hele gården. Den legges ved "
+                 "bakerst i gjødslingsplanen.",
+            foreground=AMBER if foreign and not (self._report_source or self._report_reuse or self.sample.attachment)
+            else "#666666")
         if origin_changed and foreign and getattr(self, "_loaded", False) and self.form.get("method") == "AL":
-            self.form.set("method", "annet")  # foreign labs rarely use the Norwegian AL method; change back if they do
+            self.form.set("method", "annet")  # extended analyses are often not AL; the advisor changes it back if they are
 
     def _choose_report(self) -> None:
         name = filedialog.askopenfilename(parent=self, title="Velg analyserapport (PDF)",
@@ -315,8 +350,21 @@ class SoilSampleDialog(EditDialog):
         if not name.lower().endswith(".pdf"):
             show_errors(self, ["Analyserapporten må være en PDF-fil."], "Analyserapport")
             return
-        self._report_source = Path(name)
+        self._report_source, self._report_reuse = Path(name), None
         self.report_name.configure(text=self._report_source.name)
+        self._update_report_hint()
+
+    def _existing_reports(self) -> list[tuple[str, str]]:
+        """PDF reports already attached to this enterprise's samples: (relative path, menu label)."""
+        dates: dict[str, list[str]] = {}
+        for s in repo.list_soil_samples(self.app.conn, self.sample.enterprise_id):
+            if s.attachment and s.attachment.lower().endswith(".pdf") and s.attachment != self.sample.attachment:
+                dates.setdefault(s.attachment, []).append(format_date(s.sample_date))
+        return [(r, f"{Path(r).name} (prøve {', '.join(sorted(set(d)))})") for r, d in dates.items()]
+
+    def _reuse_report(self, relative: str) -> None:
+        self._report_reuse, self._report_source = relative, None
+        self.report_name.configure(text=Path(relative).name)
         self._update_report_hint()
 
     def _map_fallback(self):
@@ -352,9 +400,9 @@ class SoilSampleDialog(EditDialog):
         values.update({key: f.get(key) for key in self._TEXT_KEYS})
         values.update(notes=notes, sample_date=sampled.isoformat() if sampled else "", p_al=p_al,
                       origin=f.get("origin"))
-        if values["origin"] == "utenlandsk" and not (self._report_source or
+        if values["origin"] == "utenlandsk" and not (self._report_source or self._report_reuse or
                                                      (self.sample.attachment or "").lower().endswith(".pdf")):
-            raise ValidationError("Velg analyserapporten (PDF) for en utenlandsk jordprøve.")
+            raise ValidationError("Velg analyserapporten (PDF) for en utvidet analyse.")
         sample = replace(self.sample, **values)
         field_ids = self.field_list.selected()
         if not field_ids and not messagebox.askyesno(
@@ -370,6 +418,10 @@ class SoilSampleDialog(EditDialog):
         if self._report_source is not None:
             sample = replace(sample, attachment=store_attachment(
                 self.app.paths.data_dir, sample.enterprise_id, self._report_source))
+        elif self._report_reuse is not None:
+            sample = replace(sample, attachment=self._report_reuse)
+        if sample.attachment != self.sample.attachment:
+            self.new_report = sample.attachment
         self.saved_id = repo.save_soil_sample(self.app.conn, sample, field_ids).id
         return None
 

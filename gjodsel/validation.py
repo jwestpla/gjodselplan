@@ -215,9 +215,9 @@ def soil_sample_errors(s: SoilSample, today: date | None = None) -> list[str]:
     if s.method not in SOIL_METHODS:
         errors.append("Metode må være «AL» eller «annet».")
     if s.origin not in SOIL_ORIGINS:
-        errors.append("Laboratoriet må være norsk eller utenlandsk.")
+        errors.append("Analysen må være Standardpakke 1 eller Utvidet analyse.")
     elif s.origin == "utenlandsk" and not (s.attachment or "").lower().endswith(".pdf"):
-        errors.append("Utenlandske jordprøver må ha analyserapporten vedlagt som PDF.")
+        errors.append("Utvidet analyse må ha analyserapporten vedlagt som PDF.")
     for value, label in ((s.depth_from_cm, "Dybde fra"), (s.depth_to_cm, "Dybde til")):
         if value is not None and value < 0:
             errors.append(f"{label} kan ikke være negativ.")

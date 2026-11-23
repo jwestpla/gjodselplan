@@ -105,6 +105,8 @@ class Settings:
 
 SOIL_METHODS = ("AL", "annet")
 SOIL_ORIGINS = ("norsk", "utenlandsk")
+# What the advisor sees. The stored values stay as they are (no migration): 'utenlandsk' = utvidet analyse.
+SOIL_ORIGIN_LABELS = {"norsk": "Standardpakke 1", "utenlandsk": "Utvidet analyse"}
 
 
 @dataclass

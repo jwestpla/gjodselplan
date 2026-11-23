@@ -7,6 +7,7 @@ cannot encode (subscripts, Unicode minus, ≥, …) are mapped to plain text.
 
 from __future__ import annotations
 
+import hashlib
 import os
 from dataclasses import dataclass
 from datetime import date
@@ -23,7 +24,7 @@ from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.platypus import (
-    CondPageBreak,
+    Flowable,
     Image,
     KeepTogether,
     PageBreak,
@@ -41,7 +42,7 @@ PAGE_W, PAGE_H = A4
 MARGIN = 16 * mm
 CONTENT_W = PAGE_W - 2 * MARGIN
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg"}
-HAND_ROWS = 3  # empty rows per field in the journal form, for hand entries
+HAND_ROWS = 15  # empty rows on each field's journal-form page, for hand entries
 
 _REPLACE = {
     "₂": "2", "₃": "3", "₅": "5", "−": "-", "≥": ">=", "≤": "<=", "→": "->", "⚠": "!", "▼": "(lav)",
@@ -115,7 +116,23 @@ def _table(rows: list[list], widths: list[float], numeric_from: int | None = Non
 # --- Page footer with "Side x av y" -----------------------------------------------------------
 
 
-def _numbered_canvas(footer_lines: list[str]):
+class _InsertMarker(Flowable):
+    """Invisible marker: the pages of `path` are inserted after the page it lands on."""
+
+    def __init__(self, registry: list, path: Path, pages: int):
+        super().__init__()
+        self.registry, self.path, self.pages = registry, path, pages
+
+    def wrap(self, *_args):
+        return 0, 0
+
+    def draw(self):
+        self.registry.append((self.canv.getPageNumber(), self.path, self.pages))
+
+
+def _numbered_canvas(footer_lines: list[str], insertions: list | None = None, appended: int = 0):
+    inserted = insertions if insertions is not None else []
+
     class NumberedCanvas(pdf_canvas.Canvas):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
@@ -126,21 +143,23 @@ def _numbered_canvas(footer_lines: list[str]):
             self._startPage()
 
         def save(self):
-            total = len(self._pages)
+            # The markers have all been drawn by now, so inserted pages can be counted in.
+            total = len(self._pages) + sum(n for _page, _path, n in inserted) + appended
             for state in self._pages:
                 self.__dict__.update(state)
-                self._draw_footer(total)
+                own = self._pageNumber
+                self._draw_footer(own + sum(n for page, _path, n in inserted if page < own), total)
                 super().showPage()
             super().save()
 
-        def _draw_footer(self, total: int) -> None:
+        def _draw_footer(self, number: int, total: int) -> None:
             self.setStrokeColor(colors.HexColor("#999999"))
             self.line(MARGIN, 14 * mm, PAGE_W - MARGIN, 14 * mm)
             y = 10.5 * mm
             self.setFont("Helvetica", 7.5)
             self.setFillColor(colors.black)
             self.drawString(MARGIN, y, plain_text(footer_lines[0]))
-            self.drawRightString(PAGE_W - MARGIN, y, f"Side {self._pageNumber} av {total}")
+            self.drawRightString(PAGE_W - MARGIN, y, f"Side {number} av {total}")
             for extra in footer_lines[1:]:
                 para = Paragraph(pdf_text(extra), ParagraphStyle(
                     "foot", fontName="Helvetica", fontSize=6.6, leading=7.6, textColor=colors.HexColor("#b00020")))
@@ -151,12 +170,13 @@ def _numbered_canvas(footer_lines: list[str]):
     return NumberedCanvas
 
 
-def _build(path: Path, story: list, footer_lines: list[str], title: str) -> None:
+def _build(path: Path, story: list, footer_lines: list[str], title: str, insertions: list | None = None,
+           appended: int = 0) -> None:
     doc = SimpleDocTemplate(
         str(path), pagesize=A4, leftMargin=MARGIN, rightMargin=MARGIN, topMargin=MARGIN,
         bottomMargin=26 * mm if len(footer_lines) > 1 else 18 * mm, title=plain_text(title),
     )
-    doc.build(story, canvasmaker=_numbered_canvas(footer_lines))
+    doc.build(story, canvasmaker=_numbered_canvas(footer_lines, insertions, appended))
 
 
 def _footer(view: PlanView, kind: str) -> list[str]:
@@ -173,53 +193,74 @@ def _footer(view: PlanView, kind: str) -> list[str]:
 def export_plan(view: PlanView, path: Path, data_dir: Path) -> Path:
     story: list = []
     story += _front_page(view)
-    story += [PageBreak()] + _map_pages(view, data_dir)
+    insertions: list = []  # (after own page, pdf path, pages) – filled while the PDF is drawn
+    story += [PageBreak()] + _map_pages(view, data_dir, insertions)
     story += [PageBreak(), P("Plan per skifte", H1)]
     for row in view.rows:
         story += _field_block(view, row)
-    reports = foreign_reports(view, data_dir)
+    reports = lab_reports(view, data_dir)
+    # Own pages: Jordanalyser, Innkjøpsliste, and one journal-form page per field (printed for the shed).
     story += [PageBreak()] + _soil_overview(view, reports)
-    story += [Spacer(1, 6 * mm), CondPageBreak(80 * mm)] + _purchase_list(view)
+    story += [PageBreak()] + _purchase_list(view)
     story += [PageBreak()] + _journal_form(view)
-    _build(path, story, _footer(view, "Gjødslingsplan"), f"Gjødslingsplan {view.year}")
-    _append_pdfs(path, [r.path for r in reports if r.pages])
+    _build(path, story, _footer(view, "Gjødslingsplan"), f"Gjødslingsplan {view.year}", insertions,
+           appended=sum(r.pages for r in reports))
+    _merge_pdfs(path, insertions, [r.path for r in reports if r.pages])
     return path
 
 
 @dataclass(frozen=True)
-class ForeignReport:
-    sample: SampleLine
+class LabReport:
+    """One lab report appended to the plan; a farm-wide report covers several samples."""
+    samples: tuple[SampleLine, ...]
     path: Path | None
     pages: int  # 0 = can't be attached, see problem
     problem: str = ""
 
 
-def foreign_reports(view: PlanView, data_dir: Path) -> list[ForeignReport]:
-    """Lab reports (PDF) of foreign soil samples used by fields in the plan, checked before the plan is drawn."""
-    out = []
-    for s in view.samples:
-        if s.origin != "utenlandsk" or not s.field_nos:
+def lab_reports(view: PlanView, data_dir: Path) -> list[LabReport]:
+    """Lab reports (PDF) of soil samples used by fields in the plan, checked before the plan is drawn.
+
+    Utvidet analyse ('utenlandsk') must have one; for Standardpakke 1 it is optional. The same report
+    (same file, or an identical copy) is appended once, however many samples it covers.
+    """
+    groups: dict[object, list] = {}  # key -> [path, pages, problem, samples]
+    for s in sorted(view.samples, key=lambda x: (x.sample_date or "", x.label or "")):
+        if not s.field_nos or (s.origin != "utenlandsk" and not s.attachment):
             continue
         path = data_dir / s.attachment if s.attachment else None
+        key: object = ("missing", s.attachment, id(s))
         if path is None or not path.exists():
-            out.append(ForeignReport(s, path, 0, "rapportfilen mangler"))
-            continue
-        try:
-            reader = PdfReader(str(path))
-            if reader.is_encrypted and not reader.decrypt(""):
-                raise ValueError("PDF-en er passordbeskyttet")
-            out.append(ForeignReport(s, path, len(reader.pages)))
-        except Exception as exc:  # a broken file must not stop the export; it is reported in the PDF
-            out.append(ForeignReport(s, path, 0, f"kunne ikke leses ({exc})"))
-    return out
+            entry = [path, 0, "rapportfilen mangler"]
+        elif path.suffix.lower() != ".pdf":
+            entry = [path, 0, "bare PDF kan legges ved planen"]
+        else:
+            key = hashlib.sha256(path.read_bytes()).hexdigest()
+            if key in groups:
+                groups[key][3].append(s)
+                continue
+            try:
+                reader = PdfReader(str(path))
+                if reader.is_encrypted and not reader.decrypt(""):
+                    raise ValueError("PDF-en er passordbeskyttet")
+                entry = [path, len(reader.pages), ""]
+            except Exception as exc:  # a broken file must not stop the export; it is reported in the PDF
+                entry = [path, 0, f"kunne ikke leses ({exc})"]
+        groups[key] = entry + [[s]]
+    return [LabReport(tuple(samples), path, pages, problem) for path, pages, problem, samples in groups.values()]
 
 
-def _append_pdfs(path: Path, extra: list[Path]) -> None:
-    if not extra:
+def _merge_pdfs(path: Path, insertions: list, appendix: list[Path]) -> None:
+    """Insert PDF pages after the marked pages (map sketches) and append the rest (lab reports)."""
+    if not insertions and not appendix:
         return
     writer = PdfWriter()
-    writer.append(str(path))
-    for f in extra:
+    for number, page in enumerate(PdfReader(str(path)).pages, start=1):
+        writer.add_page(page)
+        for after, extra, _pages in insertions:
+            if after == number:
+                writer.append(str(extra))
+    for f in appendix:
         writer.append(str(f))
     tmp = path.with_name(path.name + ".tmp")
     with open(tmp, "wb") as fh:
@@ -266,13 +307,14 @@ def _front_page(view: PlanView) -> list:
         out.append(P(f"• {m}", WARN))
 
     out += [P("Skifter", H2)]
-    rows = [["Nr.", "Navn", "Kultur", "Daa", "Stadium", "Behov N", "Behov P", "Planlagt N", "Planlagt P"]]
+    rows = [["Nr.", "Navn", "Kultur", "Daa", "Stadium", "Behov N", "Behov P", "Behov K",
+             "Plan N", "Plan P", "Plan K"]]
     for r in view.rows:
-        rows.append([r.field_no, r.name, r.culture_name, _num(r.area_daa), r.stage or "–",
-                     _num(r.effective["n"]), _num(r.effective["p"]),
-                     _num(r.planned_supply["n"]) if r.fertilized else "ikke gjødslet",
-                     _num(r.planned_supply["p"]) if r.fertilized else ""])
-    out.append(_table(rows, [11 * mm, 38 * mm, 28 * mm, 14 * mm, 20 * mm, 15 * mm, 15 * mm, 17 * mm, 16 * mm],
+        stage = (r.stage or "–") + ("" if r.fertilized else " (ikke gjødslet)")
+        planned = [_num(r.planned_supply[n]) if r.fertilized else "–" for n in "npk"]
+        rows.append([r.field_no, r.name, r.culture_name, _num(r.area_daa), stage,
+                     *(_num(r.effective[n]) for n in "npk"), *planned])
+    out.append(_table(rows, [10 * mm, 32 * mm, 24 * mm, 13 * mm, 18 * mm] + [13.5 * mm] * 6,
                       numeric_from=5, extra=[("ALIGN", (3, 1), (3, -1), "RIGHT")]))
 
     if view.warnings:
@@ -280,9 +322,9 @@ def _front_page(view: PlanView) -> list:
     return out
 
 
-def _map_pages(view: PlanView, data_dir: Path) -> list:
+def _map_pages(view: PlanView, data_dir: Path, insertions: list) -> list:
     out = [P("Kartskisse", H1)]
-    for p in view.properties:
+    for index, p in enumerate(view.properties):
         out.append(P(f"{p['label']} – {'leid' if p['tenure'] == 'leid' else 'eid'}", H2))
         relative = p.get("map_attachment")
         if not relative:
@@ -299,7 +341,19 @@ def _map_pages(view: PlanView, data_dir: Path) -> list:
             except Exception as exc:  # unreadable image: say so instead of failing the whole export
                 out.append(P(f"Kunne ikke lese kartfilen {relative}: {exc}", WARN))
         else:
-            out.append(P(f"Kartskissen er vedlagt som egen fil: {file.name} (legg den ved planen).", BODY, bold=True))
+            try:
+                reader = PdfReader(str(file))
+                if reader.is_encrypted and not reader.decrypt(""):
+                    raise ValueError("PDF-en er passordbeskyttet")
+                pages = len(reader.pages)
+            except Exception as exc:  # a broken file must not stop the export; it is reported in the PDF
+                out.append(P(f"KART MANGLER – kartfilen {file.name} kunne ikke leses ({exc}).", BIG_WARN, bold=True))
+                continue
+            out.append(P(f"Kartskissen ({file.name}) følger på {'neste side' if pages == 1 else f'de neste {pages} sidene'}.",
+                         BODY))
+            out.append(_InsertMarker(insertions, file, pages))
+            if index < len(view.properties) - 1:
+                out.append(PageBreak())  # the next property starts after the inserted map
     return out
 
 
@@ -352,7 +406,7 @@ def _field_block(view: PlanView, r: FieldRow) -> list:
     return [KeepTogether(block[:4]), *block[4:], Spacer(1, 3 * mm)]
 
 
-def _soil_overview(view: PlanView, reports: list[ForeignReport]) -> list:
+def _soil_overview(view: PlanView, reports: list[LabReport]) -> list:
     out = [P("Jordanalyser", H1),
            P(f"Gyldighet vurdert for {view.year}. Bare AL-analyser brukes i beregningen. "
              "P-AL er oppgitt som mg P/100 g.", SMALL), Spacer(1, 2 * mm)]
@@ -364,7 +418,7 @@ def _soil_overview(view: PlanView, reports: list[ForeignReport]) -> list:
                                       else "" for k in keys), "", "", ""])
     invalid_rows = []
     for s in view.samples:
-        lab = " / ".join(filter(None, (s.label, s.lab))) + (" (utenlandsk lab)" if s.origin == "utenlandsk" else "")
+        lab = " / ".join(filter(None, (s.label, s.lab))) + (" (utvidet analyse)" if s.origin == "utenlandsk" else "")
         rows.append([format_date(s.sample_date), lab, s.method,
                      *(_num(s.values.get(k), 1, "") for k in keys), f"{s.age} år",
                      s.validity_text if s.valid else f"UGYLDIG: {s.validity_text}", ", ".join(s.field_nos)])
@@ -380,14 +434,15 @@ def _soil_overview(view: PlanView, reports: list[ForeignReport]) -> list:
     if any(s.lat is None for s in view.samples):
         out.append(P("Merk: § 29 krever koordinater for prøvepunktene; noen prøver mangler koordinater.", WARN))
     if reports:
-        out += [Spacer(1, 3 * mm), P("Analyserapporter fra utenlandske laboratorier", H3)]
+        out += [Spacer(1, 3 * mm), P("Analyserapporter", H3)]
         for r in reports:
-            name = f"{format_date(r.sample.sample_date)} {r.sample.label or ''}".strip()
+            names = ", ".join(f"{format_date(x.sample_date)} {x.label or ''}".strip() for x in r.samples)
+            lab = r.samples[0].lab
             if r.pages:
-                out.append(P(f"• {name} ({r.sample.lab or 'ukjent lab'}): lagt ved bakerst i planen, "
-                             f"{r.pages} side(r) – {r.path.name}", BODY))
+                out.append(P(f"• {r.path.name}{f' ({lab})' if lab else ''} – prøve{'r' if len(r.samples) > 1 else ''} "
+                             f"{names}: lagt ved bakerst i planen, {r.pages} side(r).", BODY))
             else:
-                out.append(P(f"• {name}: rapporten kunne ikke legges ved – {r.problem}.", WARN))
+                out.append(P(f"• {names}: rapporten kunne ikke legges ved – {r.problem}.", WARN))
     return out
 
 
@@ -422,22 +477,30 @@ def _purchase_list(view: PlanView) -> list:
 
 
 def _journal_form(view: PlanView) -> list:
-    out = [P("Gjødseljournal – skjema per skifte", H1),
-           P("Planlagt og utført gjødsling. Tomme linjer kan fylles ut for hånd.", SMALL)]
-    for r in view.rows:
-        rows = [["Dato", "Gjødseltype", "Planlagt kg/daa", "Utført kg/daa", "N kg/daa", "P kg/daa", "Utført av"]]
+    """One page per field: planned and actual applications plus empty rows to fill in by hand."""
+    out = []
+    for index, r in enumerate(view.rows):
+        if index:
+            out.append(PageBreak())
+        rows = [["Dato", "Gjødseltype", "Planlagt kg/daa", "Utført kg/daa", "N kg/daa", "P kg/daa", "K kg/daa",
+                 "Utført av"]]
         for line in r.planned:
-            rows.append([line.timing_label, line.product_name, _num(line.kg_per_daa), "", "", "", ""])
+            rows.append([line.timing_label, line.product_name, _num(line.kg_per_daa), "", "", "", "", ""])
         for line in r.actual:
             rows.append([format_date(line.date), line.product_name, "", _num(line.kg_per_daa),
-                         _num(line.supply["n"], 2), _num(line.supply["p"], 2), line.performed_by or ""])
+                         *(_num(line.supply[n], 2) for n in "npk"), line.performed_by or ""])
         filled = len(rows)
-        rows += [[""] * 7 for _ in range(HAND_ROWS)]
-        out.append(KeepTogether([
-            P(f"Skifte {r.field_no} – {r.name} ({_num(r.area_daa)} daa, {r.culture_name})", H3),
-            _table(rows, [22 * mm, 50 * mm, 22 * mm, 22 * mm, 17 * mm, 17 * mm, 24 * mm], numeric_from=2,
+        rows += [[""] * 8 for _ in range(HAND_ROWS)]
+        out += [
+            P(f"Gjødseljournal {view.year} – skifte {r.field_no} {r.name}", H2),
+            P(f"{view.enterprise.get('name', '')} · {_num(r.area_daa)} daa · {r.culture_name}"
+              + (f" · {r.variety}" if r.variety else ""), BODY, bold=True),
+            P("Planlagt og utført gjødsling. Tomme linjer kan fylles ut for hånd.", SMALL), Spacer(1, 2 * mm),
+            _table(rows, [20 * mm, 46 * mm, 19 * mm, 19 * mm, 16 * mm, 16 * mm, 16 * mm, 24 * mm], numeric_from=2,
                    row_heights=[None] * filled + [7 * mm] * HAND_ROWS),
-        ]))
+        ]
+    if not view.rows:
+        out.append(P("Gjødseljournal – ingen skifter i planen.", H2))
     return out
 
 
@@ -451,28 +514,37 @@ def export_journal(view: PlanView, path: Path) -> Path:
              P(f"{e.get('name', '')}" + (f" · org.nr. {e['org_nr']}" if e.get("org_nr") else "")
                + f" · utskrevet {format_date(date.today().isoformat())}", BODY, bold=True),
              P("Journal etter gjødselbrukforskriften § 27: skifte, dato, gjødseltype og mengde, N og P per skifte "
-               "og samlet for foretaket.", SMALL), Spacer(1, 3 * mm)]
+               "og samlet for foretaket. K er tatt med i tillegg (ikke påkrevd).", SMALL), Spacer(1, 3 * mm)]
+    for index, f in enumerate(totals["fields"]):
+        r = f["row"]
+        if index:
+            story.append(PageBreak())  # one page per field
+        rows = [["Dato", "Gjødseltype", "kg/daa", "Totalt kg", "N kg/daa", "P kg/daa", "K kg/daa",
+                 "N kg", "P kg", "K kg"]]
+        for line in sorted(r.actual, key=lambda a: a.date or ""):
+            per_daa = [line.supply[n] for n in "npk"]
+            rows.append([format_date(line.date), line.product_name, _num(line.kg_per_daa), _num(line.total_kg, 0),
+                         *(_num(v, 2) for v in per_daa),
+                         *(_num(None if v is None else v * r.area_daa, 1) for v in per_daa)])
+        if not r.actual:
+            rows.append(["", "Ingen gjødsling registrert"] + [""] * 8)
+        rows.append([P("Sum skifte", CELL, bold=True), "", "", "",
+                     *(P(_num(f[f"{n}_daa"], 2), CELL_R, bold=True) for n in "npk"),
+                     *(P(_num(f[f"{n}_kg"], 1), CELL_R, bold=True) for n in "npk")])
+        story += [
+            P(f"Skifte {r.field_no} – {r.name} ({_num(r.area_daa)} daa, {r.culture_name})", H2),
+            _table(rows, [17 * mm, 40 * mm, 13 * mm, 15 * mm] + [14.5 * mm] * 3 + [15.5 * mm] * 3, numeric_from=2),
+        ]
+    summary = [["Skifte", "Daa", "N kg/daa", "P kg/daa", "K kg/daa", "N kg", "P kg", "K kg"]]
     for f in totals["fields"]:
         r = f["row"]
-        rows = [["Dato", "Gjødseltype", "kg/daa", "Totalt kg", "N kg/daa", "P kg/daa", "N kg", "P kg"]]
-        for line in sorted(r.actual, key=lambda a: a.date or ""):
-            n, p = line.supply["n"], line.supply["p"]
-            rows.append([format_date(line.date), line.product_name, _num(line.kg_per_daa), _num(line.total_kg, 0),
-                         _num(n, 2), _num(p, 2), _num(None if n is None else n * r.area_daa, 1),
-                         _num(None if p is None else p * r.area_daa, 1)])
-        if not r.actual:
-            rows.append(["", "Ingen gjødsling registrert", "", "", "", "", "", ""])
-        rows.append([P("Sum skifte", CELL, bold=True), "", "", "", P(_num(f["n_daa"], 2), CELL_R, bold=True),
-                     P(_num(f["p_daa"], 2), CELL_R, bold=True), P(_num(f["n_kg"], 1), CELL_R, bold=True),
-                     P(_num(f["p_kg"], 1), CELL_R, bold=True)])
-        story.append(KeepTogether([
-            P(f"Skifte {r.field_no} – {r.name} ({_num(r.area_daa)} daa, {r.culture_name})", H3),
-            _table(rows, [20 * mm, 52 * mm, 15 * mm, 18 * mm, 17 * mm, 17 * mm, 17 * mm, 17 * mm], numeric_from=2),
-        ]))
-    story += [P("Sum for foretaket", H2),
-              _table([["", "N", "P"],
-                      ["Totalt tilført (kg)", _num(totals["n_kg"], 1), _num(totals["p_kg"], 1)]],
-                     [60 * mm, 30 * mm, 30 * mm], numeric_from=1)]
+        summary.append([f"{r.field_no} – {r.name}", _num(r.area_daa), *(_num(f[f"{n}_daa"], 2) for n in "npk"),
+                        *(_num(f[f"{n}_kg"], 1) for n in "npk")])
+    summary.append([P("Sum for foretaket", CELL, bold=True), P(_num(sum(f["row"].area_daa for f in totals["fields"])),
+                                                               CELL_R, bold=True), "", "", "",
+                    *(P(_num(totals[f"{n}_kg"], 1), CELL_R, bold=True) for n in "npk")])
+    story += [PageBreak(), P("Sum for foretaket", H2),
+              _table(summary, [52 * mm, 14 * mm] + [17 * mm] * 3 + [19 * mm] * 3, numeric_from=1)]
     _build(path, story, [f"Gjødseljournal {view.year} · {e.get('name', '')}"], f"Gjødseljournal {view.year}")
     return path
 

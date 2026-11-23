@@ -98,8 +98,9 @@ Review `git diff` and run the tests before committing.
    fields. "Åpne i Gårdskart" copies `knr/gnr/bnr/fnr/snr` to the clipboard.
 3. **Jordprøver** – soil samples, linked to fields. P-AL can be entered as
    mg P₂O₅/100 g; it is stored as mg P/100 g. Samples need coordinates (§ 29).
-   Choose *Norsk lab* or *Utenlandsk lab*. A foreign sample needs the lab's report as
-   a PDF; it is appended at the back of the plan PDF (needs `pypdf`).
+   Choose *Standardpakke 1* or *Utvidet analyse*. An extended analysis needs the lab's report as
+   a PDF; for Standardpakke 1 it is optional (often one PDF for the whole farm, reusable via
+   *Gjenbruk*). Reports are appended once at the back of the plan PDF (needs `pypdf`).
    One sample can cover several fields: tick them in the sample form or use
    *Velg skifter…*. The app then offers to use the sample in draft plans for
    fields that have no valid sample or an older one.
