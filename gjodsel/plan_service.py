@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import asdict, replace
+from pathlib import Path
 
-from . import repo
+from . import farm_map, map_service, repo
 from .calc import Requirement, calculate_requirement, describe_rows
 from .db import now_iso
 from .models import Application, Field, FieldSeason, Plan, Settings, SoilSample
@@ -138,11 +139,22 @@ def copy_planned_to_actual(conn: sqlite3.Connection, ref: RefTables, planned_ids
 # --- Lifecycle (PLAN §7: Ferdigstill, Ny versjon, Kopier fra fjorår) --------------------------
 
 
-def finalize(conn: sqlite3.Connection, ref: RefTables, settings: Settings, plan: Plan) -> Plan:
-    """Freeze the plan: store the full report model (incl. reference rows used) and set status 'ferdig'."""
+def finalize(conn: sqlite3.Connection, ref: RefTables, settings: Settings, plan: Plan,
+             data_dir: Path | None = None) -> Plan:
+    """Freeze the plan: store the full report model (incl. reference rows used) and set status 'ferdig'.
+
+    With `data_dir`, generated farm maps are frozen too: their background is copied next to the plan,
+    so refreshing a map later does not change a finished plan.
+    """
     if plan.finished:
         raise ValidationError(repo.FINISHED_PLAN)
-    view = _build_live(conn, ref, settings, plan)
+    view = _build_live(conn, ref, settings, plan, data_dir)
+    if data_dir is not None:
+        for prop in view.properties:
+            if prop.get("generated_map"):
+                fm = farm_map.freeze(farm_map.FarmMap.from_dict(prop["generated_map"]), data_dir,
+                                     map_service.frozen_path(plan.enterprise_id, plan.id, prop["id"]))
+                prop["generated_map"]["background"] = fm.background
     stamp = now_iso()
     view.status, view.finalized_at, view.generated_at = "ferdig", stamp, stamp
     for row in view.rows:
@@ -220,13 +232,17 @@ def _planned_by_field(conn: sqlite3.Connection, plan_id: int, seasons: list[Fiel
 # --- Building the report model ------------------------------------------------------------------
 
 
-def build_view(conn: sqlite3.Connection, ref: RefTables, settings: Settings, plan: Plan) -> PlanView:
-    """Finished plans come from their snapshot (with the live journal overlaid); drafts are built live."""
+def build_view(conn: sqlite3.Connection, ref: RefTables, settings: Settings, plan: Plan,
+               data_dir: Path | None = None) -> PlanView:
+    """Finished plans come from their snapshot (with the live journal overlaid); drafts are built live.
+
+    `data_dir` (the data folder) adds the cached generated farm maps to a draft.
+    """
     if plan.finished and plan.snapshot_json:
         view = PlanView.from_json(plan.snapshot_json)
         _overlay_actual(conn, ref, view)
         return view
-    return _build_live(conn, ref, settings, plan)
+    return _build_live(conn, ref, settings, plan, data_dir)
 
 
 def status_summary(conn: sqlite3.Connection, ref: RefTables | None, settings: Settings | None,
@@ -286,7 +302,8 @@ def _overlay_actual(conn: sqlite3.Connection, ref: RefTables, view: PlanView) ->
         row.actual_supply = _sum_lines(row.actual)
 
 
-def _build_live(conn: sqlite3.Connection, ref: RefTables, settings: Settings, plan: Plan) -> PlanView:
+def _build_live(conn: sqlite3.Connection, ref: RefTables, settings: Settings, plan: Plan,
+                data_dir: Path | None = None) -> PlanView:
     e = repo.get_enterprise(conn, plan.enterprise_id)
     properties = repo.list_properties(conn, e.id)
     prop_map = {p.id: p for p in properties}
@@ -364,8 +381,9 @@ def _build_live(conn: sqlite3.Connection, ref: RefTables, settings: Settings, pl
         warnings.append(f"Mangler gyldig jordprøve (mangelfull etter § 26): {', '.join(sc.missing)}.")
     if sc.expiring_soon:
         warnings.append(f"Jordprøve utløper etter {plan.year}: {', '.join(sc.expiring_soon)}.")
+    generated = {p.id: farm_map.load_cached(data_dir, e.id, p.id) for p in properties} if data_dir else {}
     for p in properties:
-        if not p.map_attachment:
+        if not p.map_attachment and not generated.get(p.id):
             warnings.append(f"Kartskisse mangler for eiendom {p.label} (påkrevd etter § 26).")
     if any(r.req["n"] is None for r in rows):
         warnings.append("Behovet kunne ikke beregnes for alle skifter – se varsler per skifte.")
@@ -393,7 +411,9 @@ def _build_live(conn: sqlite3.Connection, ref: RefTables, settings: Settings, pl
         change_reason=plan.change_reason, finalized_at=plan.finalized_at, created_at=plan.created_at,
         enterprise={k: v for k, v in asdict(e).items() if k not in ("created_at", "updated_at")},
         properties=[{**{k: v for k, v in asdict(p).items() if k not in ("created_at", "updated_at")},
-                     "label": p.label, "matrikkel": p.matrikkel} for p in properties],
+                     "label": p.label, "matrikkel": p.matrikkel,
+                     "generated_map": map_service.view_data(conn, e.id, p.id, generated[p.id])
+                     if generated.get(p.id) else None} for p in properties],
         advisor=advisor, rows=rows, samples=sample_lines,
         soil_optimum={k: {"min": o.min, "max": o.max, "source": o.source} for k, o in ref.soil_optimum.items()},
         fertilized_area=area, plan_required=legal.plan_required, legal_text=legal.text,

@@ -2,6 +2,8 @@
 
     --selftest   check the installation without user interaction; writes selftest.log
                  in the data folder and exits with 0 (OK) or 1 (error)
+    --karttest   check that the map services (Kartverket, NIBIO) can be reached over HTTPS;
+                 writes karttest.log in the data folder, exit code 0 (OK) or 1
     --version    print the version
 """
 
@@ -36,6 +38,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if "--selftest" in args:
         return selftest()
+    if "--karttest" in args:
+        return map_network_test()
 
     paths = config.get_paths()
     try:
@@ -94,11 +98,22 @@ def selftest() -> int:
         if "demo" in notes and not plans:
             raise RuntimeError("demodatabasen mangler plan")
         if plans:
-            view = plan_service.build_view(conn, ref, settings, plans[-1])
+            view = plan_service.build_view(conn, ref, settings, plans[-1], data_dir=paths.data_dir)
             plan_pdf = pdf_export.export_plan(view, paths.export_dir / "selvtest_plan.pdf", paths.data_dir)
             journal_pdf = pdf_export.export_journal(view, paths.export_dir / "selvtest_journal.pdf")
             lines.append(f"plan {view.year}: {len(view.rows)} skifter, {view.legal_text}, {view.p_summary}")
             lines.append(f"PDF: {plan_pdf.stat().st_size} + {journal_pdf.stat().st_size} byte")
+            # Generated farm map without network: Pillow/JPEG and the map drawing must be in the bundle
+            from dataclasses import asdict
+
+            from gjodsel import farm_map
+
+            fm, points = farm_map.selftest_map(paths.data_dir, paths.export_dir)
+            first = view.properties[0] if view.properties else {"label": "Selvtest", "tenure": "eid"}
+            view.properties = [{**first, "map_attachment": None, "generated_map": {
+                **fm.to_dict(), "points": [asdict(p) for p in points], "missing_coordinates": []}}]
+            map_pdf = pdf_export.export_plan(view, paths.export_dir / "selvtest_kart.pdf", paths.data_dir)
+            lines.append(f"eiendomskart (uten nett): {map_pdf.stat().st_size} byte")
         from gjodsel.ui.main_window import MainWindow
 
         window = MainWindow(conn, paths, ref, [])
@@ -106,6 +121,11 @@ def selftest() -> int:
         for tab in window.tabs.values():
             window.notebook.select(tab)
             window.update()
+        properties = [p for e in enterprises for p in repo.list_properties(conn, e.id)]
+        if properties:
+            from gjodsel.ui.map_dialog import MapDialog
+
+            MapDialog(window, window, properties[0]).update()  # shows the cached map or "not fetched"
         lines.append(f"vindu: {window.title()} – {len(window.tabs)} faner vist")
         window.destroy()
         conn.close()
@@ -118,6 +138,24 @@ def selftest() -> int:
     try:
         paths.data_dir.mkdir(parents=True, exist_ok=True)
         (paths.data_dir / "selftest.log").write_text(text, encoding="utf-8")
+    except OSError:
+        pass
+    if sys.stdout is not None:
+        print(text, end="")
+    return code
+
+
+def map_network_test() -> int:
+    """Reach the open map services over HTTPS (needs internet; not part of --selftest)."""
+    from gjodsel import farm_map
+
+    paths = config.get_paths()
+    lines = [f"Gjødselplan {__version__} karttest", *farm_map.network_check()]
+    code = 0 if all(line.startswith("OK") for line in lines[1:]) else 1
+    text = "\n".join(lines + ["OK" if code == 0 else "FEIL"]) + "\n"
+    try:
+        paths.data_dir.mkdir(parents=True, exist_ok=True)
+        (paths.data_dir / "karttest.log").write_text(text, encoding="utf-8")
     except OSError:
         pass
     if sys.stdout is not None:

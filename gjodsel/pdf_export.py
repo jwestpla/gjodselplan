@@ -35,6 +35,8 @@ from reportlab.platypus import (
     TableStyle,
 )
 
+from . import farm_map, map_service
+from .geo import format_coordinates
 from .plan_view import FieldRow, PlanView, SampleLine
 from .units import format_date, format_number, format_plain
 
@@ -323,38 +325,176 @@ def _front_page(view: PlanView) -> list:
 
 
 def _map_pages(view: PlanView, data_dir: Path, insertions: list) -> list:
+    """Per property: the generated map (boundary + soil sample points), then the uploaded gårdskart."""
     out = [P("Kartskisse", H1)]
     for index, p in enumerate(view.properties):
+        if index:
+            out.append(PageBreak())
         out.append(P(f"{p['label']} – {'leid' if p['tenure'] == 'leid' else 'eid'}", H2))
-        relative = p.get("map_attachment")
-        if not relative:
-            out.append(P("KART MANGLER – påkrevd etter § 26", BIG_WARN, bold=True))
-            continue
-        file = data_dir / relative
-        if not file.exists():
-            out.append(P(f"KART MANGLER – finner ikke filen {relative} (påkrevd etter § 26)", BIG_WARN, bold=True))
-        elif file.suffix.lower() in IMAGE_SUFFIXES:
-            try:
-                w, h = ImageReader(str(file)).getSize()
-                scale = min(CONTENT_W / w, 200 * mm / h)
-                out.append(Image(str(file), width=w * scale, height=h * scale))
-            except Exception as exc:  # unreadable image: say so instead of failing the whole export
-                out.append(P(f"Kunne ikke lese kartfilen {relative}: {exc}", WARN))
-        else:
-            try:
-                reader = PdfReader(str(file))
-                if reader.is_encrypted and not reader.decrypt(""):
-                    raise ValueError("PDF-en er passordbeskyttet")
-                pages = len(reader.pages)
-            except Exception as exc:  # a broken file must not stop the export; it is reported in the PDF
-                out.append(P(f"KART MANGLER – kartfilen {file.name} kunne ikke leses ({exc}).", BIG_WARN, bold=True))
-                continue
-            out.append(P(f"Kartskissen ({file.name}) følger på {'neste side' if pages == 1 else f'de neste {pages} sidene'}.",
-                         BODY))
-            out.append(_InsertMarker(insertions, file, pages))
-            if index < len(view.properties) - 1:
-                out.append(PageBreak())  # the next property starts after the inserted map
+        generated = p.get("generated_map")
+        if generated:
+            out += _generated_map(generated, data_dir)
+        out += _uploaded_map(p.get("map_attachment"), data_dir, insertions, after_generated=bool(generated))
     return out
+
+
+def _uploaded_map(relative: str | None, data_dir: Path, insertions: list, after_generated: bool) -> list:
+    if not relative:
+        return [] if after_generated else [P("KART MANGLER – påkrevd etter § 26", BIG_WARN, bold=True)]
+    out = [] if after_generated else [
+        P("Generert kart med jordprøvepunkter er ikke hentet (Eiendommer og skifter → Kart…).", SMALL)]
+    file = data_dir / relative
+    if not file.exists():
+        return out + [P(f"{'Opplastet kart' if after_generated else 'KART MANGLER'} – finner ikke filen {relative}"
+                        f"{'' if after_generated else ' (påkrevd etter § 26)'}", BIG_WARN, bold=True)]
+    if file.suffix.lower() in IMAGE_SUFFIXES:
+        if after_generated:
+            out += [PageBreak(), P(f"Opplastet gårdskart: {file.name}", H3)]
+        try:
+            w, h = ImageReader(str(file)).getSize()
+            scale = min(CONTENT_W / w, 200 * mm / h)
+            out.append(Image(str(file), width=w * scale, height=h * scale))
+        except Exception as exc:  # unreadable image: say so instead of failing the whole export
+            out.append(P(f"Kunne ikke lese kartfilen {relative}: {exc}", WARN))
+        return out
+    try:
+        reader = PdfReader(str(file))
+        if reader.is_encrypted and not reader.decrypt(""):
+            raise ValueError("PDF-en er passordbeskyttet")
+        pages = len(reader.pages)
+    except Exception as exc:  # a broken file must not stop the export; it is reported in the PDF
+        return out + [P(f"{'Opplastet kart' if after_generated else 'KART MANGLER'} – kartfilen {file.name} "
+                        f"kunne ikke leses ({exc}).", BIG_WARN, bold=True)]
+    where = "neste side" if pages == 1 else f"de neste {pages} sidene"
+    text = f"Opplastet gårdskart ({file.name}) følger på {where}." if after_generated \
+        else f"Kartskissen ({file.name}) følger på {where}."
+    return out + [P(text, BODY), _InsertMarker(insertions, file, pages)]
+
+
+def _generated_map(data: dict, data_dir: Path) -> list:
+    fm, points, missing = map_service.from_view_data(data)
+    background = data_dir / fm.background
+    if not background.is_file():
+        return [P(f"Generert kart: finner ikke kartbildet {fm.background}. Hent kartet på nytt "
+                  "(Eiendommer og skifter → Kart…).", WARN)]
+    inside, outside = fm.place(points)
+    width = CONTENT_W
+    height = width * fm.height / fm.width
+    if height > 165 * mm:
+        width, height = width * 165 * mm / height, 165 * mm
+    out = [P("Eiendomskart med jordprøvepunkter", H3), _FarmMapFlowable(fm, inside, background, width, height),
+           Spacer(1, 1.5 * mm),
+           P("Rød linje: eiendomsgrense · gul sirkel: jordprøve · blå firkant: skifte. "
+             f"{farm_map.BOUNDARY_NOTE} Kart hentet {format_date(fm.fetched_date())}.", SMALL),
+           P(farm_map.ATTRIBUTION.get(fm.background_kind, ""), SMALL)]
+    for note in fm.notes:
+        out.append(P(note, WARN))
+    if outside:
+        out.append(P("Utenfor kartutsnittet (hent kartet på nytt): " + ", ".join(p.label for p in outside) + ".", WARN))
+    if missing:
+        out.append(P("Jordprøver uten koordinater (§ 29 krever prøvepunkter med koordinater): "
+                     + ", ".join(missing) + ".", WARN))
+    away = fm.teiger_outside()
+    if away:
+        out.append(P(f"{away} teig{'er' if away > 1 else ''} av eiendommen ligger utenfor kartutsnittet.", SMALL))
+    samples = sorted((p for p in points if p.kind == "sample"), key=lambda p: p.label.lower())
+    if samples:
+        rows = [["Jordprøvepunkt", "Koordinater (WGS84)"]] + [[p.label, format_coordinates(p.lat, p.lon)]
+                                                              for p in samples]
+        out += [Spacer(1, 2 * mm), _table(rows, [70 * mm, 70 * mm])]
+    return out
+
+
+class _FarmMapFlowable(Flowable):
+    """Background image with the boundary, points and labels drawn as vectors (sharp, searchable text)."""
+
+    def __init__(self, fm, inside: list, background: Path, width: float, height: float):
+        super().__init__()
+        self.fm, self.inside, self.background = fm, inside, background
+        self.width, self.height = width, height
+
+    def wrap(self, *_args):
+        return self.width, self.height
+
+    def draw(self):
+        c, w, h = self.canv, self.width, self.height
+        c.saveState()
+        c.drawImage(str(self.background), 0, 0, w, h)
+        clip = c.beginPath()
+        clip.rect(0, 0, w, h)
+        c.clipPath(clip, stroke=0, fill=0)
+        c.setStrokeColor(colors.HexColor("#d0021b"))
+        c.setLineWidth(1.4)
+        c.setLineJoin(1)
+        for ring in self.fm.rings():
+            path = c.beginPath()
+            path.moveTo(ring[0][0] * w, (1 - ring[0][1]) * h)
+            for fx, fy in ring[1:]:
+                path.lineTo(fx * w, (1 - fy) * h)
+            path.close()
+            c.drawPath(path, stroke=1, fill=0)
+        for point, fx, fy in sorted(self.inside, key=lambda item: item[0].kind == "sample"):
+            x, y = fx * w, (1 - fy) * h
+            sample = point.kind == "sample"
+            if sample:
+                c.setStrokeColor(colors.black)
+                c.setLineWidth(0.7)
+                c.setFillColor(colors.HexColor("#ffd400"))
+                c.circle(x, y, 2.6, stroke=1, fill=1)
+            else:
+                c.setStrokeColor(colors.white)
+                c.setLineWidth(0.6)
+                c.setFillColor(colors.HexColor("#1565c0"))
+                c.rect(x - 2, y - 2, 4, 4, stroke=1, fill=1)
+            font, size = ("Helvetica-Bold", 7.2) if sample else ("Helvetica", 6.6)
+            text = plain_text(point.label)
+            tw = c.stringWidth(text, font, size)
+            if sample:  # right of the point (left near the edge)
+                tx, ty = (x + 4.5 if x + 4.5 + tw < w - 2 else x - 4.5 - tw), y - 2.4
+            else:  # fields: centred under the square, so they don't collide with sample names
+                tx, ty = min(max(x - tw / 2, 2), w - 2 - tw), y - 10
+            c.setFillColor(colors.white)
+            c.setFillAlpha(0.78)
+            c.rect(tx - 1.2, ty - 1.8, tw + 2.4, size + 2.2, stroke=0, fill=1)
+            c.setFillAlpha(1)
+            c.setFillColor(colors.black if sample else colors.HexColor("#0d3c78"))
+            c.setFont(font, size)
+            c.drawString(tx, ty, text)
+        c.restoreState()
+        self._decorations(c, w, h)
+
+    def _decorations(self, c, w, h):
+        c.saveState()
+        c.setStrokeColor(colors.HexColor("#555555"))
+        c.setLineWidth(0.6)
+        c.rect(0, 0, w, h, stroke=1, fill=0)
+        # scale bar, bottom left
+        metres = farm_map.nice_scale_length(self.fm.metres_per_width())
+        bar = metres / self.fm.metres_per_width() * w
+        c.setFillColor(colors.white)
+        c.setFillAlpha(0.85)
+        c.rect(5, 5, bar + 10, 15, stroke=0, fill=1)
+        c.setFillAlpha(1)
+        c.setFillColor(colors.black)
+        c.rect(10, 9, bar, 2.5, stroke=0, fill=1)
+        c.setFont("Helvetica", 6.5)
+        c.drawString(10, 13.5, f"{metres} m")
+        # north arrow, top right
+        x, y = w - 14, h - 26
+        c.setFillColor(colors.white)
+        c.setFillAlpha(0.85)
+        c.rect(x - 8, y - 4, 16, 26, stroke=0, fill=1)
+        c.setFillAlpha(1)
+        c.setFillColor(colors.black)
+        arrow = c.beginPath()
+        arrow.moveTo(x, y + 12)
+        arrow.lineTo(x - 4, y)
+        arrow.lineTo(x + 4, y)
+        arrow.close()
+        c.drawPath(arrow, stroke=0, fill=1)
+        c.setFont("Helvetica-Bold", 7)
+        c.drawCentredString(x, y + 14, "N")
+        c.restoreState()
 
 
 def _field_block(view: PlanView, r: FieldRow) -> list:

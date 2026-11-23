@@ -255,7 +255,7 @@ class PlanTab(ttk.Frame):
             return
         ref, settings = context
         try:
-            self.view = ps.build_view(self.app.conn, ref, settings, self.plan)
+            self.view = ps.build_view(self.app.conn, ref, settings, self.plan, data_dir=self.app.paths.data_dir)
         except ValidationError as exc:
             self._set_message(exc.errors[0], RED)
             return
@@ -573,6 +573,9 @@ class PlanTab(ttk.Frame):
     def finalize(self) -> None:
         if self.plan is None or self.view is None:
             return
+        self._offer_maps()
+        if self.view is None:
+            return
         problems = list(self.view.warnings)
         for r in self.view.rows:
             problems.extend(f"Skifte {r.label}: {w}" for w in serious(r.warnings))
@@ -584,7 +587,8 @@ class PlanTab(ttk.Frame):
             if len(problems) > len(shown):
                 text += f"\n… og {len(problems) - len(shown)} til."
         if messagebox.askyesno("Ferdigstill", text, icon="warning" if problems else "question", parent=self):
-            self._run(lambda ref, st: ps.finalize(self.app.conn, ref, st, self.plan), "Planen er ferdigstilt.")
+            self._run(lambda ref, st: ps.finalize(self.app.conn, ref, st, self.plan, data_dir=self.app.paths.data_dir),
+                      "Planen er ferdigstilt.")
 
     def new_version(self) -> None:
         if self.plan is None:
@@ -603,7 +607,17 @@ class PlanTab(ttk.Frame):
             self.app.data_changed()
             self.app.set_status(f"Versjon {result['plan'].version} opprettet.")
 
+    def _offer_maps(self) -> None:
+        """Draft plans: offer to fetch the generated farm maps that are missing, then rebuild the view."""
+        from .map_dialog import offer_missing_maps
+
+        if self.view is not None and offer_missing_maps(self, self.app, self.view):
+            self.app.data_changed()
+
     def export_pdf(self) -> None:
+        if self.view is None:
+            return
+        self._offer_maps()
         if self.view is None:
             return
         from .pdf_dialogs import export_plan_pdf  # reportlab is only needed here

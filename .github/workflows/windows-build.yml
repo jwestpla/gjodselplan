@@ -52,6 +52,17 @@ jobs:
           $p = Start-Process -FilePath $exe -ArgumentList "--selftest" -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "Andre start feilet ($($p.ExitCode))" }
 
+      # The map needs internet; check HTTPS (certificates) from the packaged exe. Allowed to fail, so a
+      # service being down never blocks a release – read the log in the run if the map doesn't work.
+      - name: Karttest (Kartverket og NIBIO over HTTPS, får feile)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:RUNNER_TEMP "utpakket\Gjodselplan\Gjodselplan.exe"
+          $p = Start-Process -FilePath $exe -ArgumentList "--karttest" -Wait -PassThru
+          Get-Content (Join-Path $env:APPDATA "Gjodselplan\karttest.log")
+          if ($p.ExitCode -ne 0) { throw "Karttest feilet ($($p.ExitCode))" }
+
       - uses: actions/upload-artifact@v4
         with:
           name: Gjodselplan-windows

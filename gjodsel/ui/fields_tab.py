@@ -9,11 +9,11 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import TYPE_CHECKING
 
-from .. import repo
+from .. import farm_map, repo
 from ..attachments import open_path, resolve, store_attachment
 from ..geo import google_maps_url
 from ..models import COVER_TYPES, IRRIGATION_TYPES, Field, Property, trees_per_daa
-from ..units import format_number, parse_number
+from ..units import format_date, format_number, parse_number
 from ..validation import ValidationError
 from .coordinates import add_coordinate_picker, address_query
 from .widgets import GREY, RED, EditDialog, button_row, scrolled_tree, selected_id, show_errors
@@ -51,8 +51,9 @@ class FieldsTab(ttk.Frame):
             ("Ny eiendom", self.new_property),
             ("Rediger", self.edit_property),
             ("Slett", self.delete_property),
-            ("Legg ved kart…", self.attach_map),
-            ("Åpne kart", self.open_map),
+            ("Eiendomskart…", self.show_property_map),
+            ("Legg ved gårdskart…", self.attach_map),
+            ("Åpne gårdskart", self.open_map),
             ("Åpne i Gårdskart", self.open_gardskart),
         ]).grid(row=1, column=0, sticky="w", pady=(6, 0))
 
@@ -97,10 +98,12 @@ class FieldsTab(ttk.Frame):
 
         properties = {p.id: p for p in repo.list_properties(self.app.conn, eid)}
         for p in properties.values():
-            missing = not p.map_attachment
-            self.prop_tree.insert("", "end", iid=str(p.id), tags=("missing_map",) if missing else (), values=(
+            generated = farm_map.load_cached(self.app.paths.data_dir, eid, p.id)
+            parts = ([f"eiendomskart {format_date(generated.fetched_date())}"] if generated else []) + (
+                [Path(p.map_attachment).name] if p.map_attachment else [])
+            self.prop_tree.insert("", "end", iid=str(p.id), tags=() if parts else ("missing_map",), values=(
                 p.farm_name or "", p.kommunenr, p.gnr, p.bnr, p.fnr, p.snr, p.tenure,
-                "MANGLER – påkrevd etter § 26" if missing else Path(p.map_attachment).name,
+                " + ".join(parts) if parts else "MANGLER – påkrevd etter § 26",
             ))
 
         cultures = self.app.ref.cultures if self.app.ref else {}
@@ -179,6 +182,14 @@ class FieldsTab(ttk.Frame):
             show_errors(self, exc.errors, "Kan ikke slette")
             return
         self.app.data_changed()
+
+    def show_property_map(self) -> None:
+        """Generated map with the property boundary and the soil sample points (needs internet to fetch)."""
+        p = self._selected_property()
+        if p:
+            from .map_dialog import MapDialog
+
+            MapDialog(self, self.app, p)
 
     def attach_map(self) -> None:
         p = self._selected_property()

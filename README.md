@@ -96,6 +96,12 @@ Review `git diff` and run the tests before committing.
 1. **Foretak** – register the enterprise (org.nr. is checked with mod11).
 2. **Eiendommer og skifter** – properties (with kartskisse, required by § 26) and
    fields. "Åpne i Gårdskart" copies `knr/gnr/bnr/fnr/snr` to the clipboard.
+   *Eiendomskart…* fetches a map of the property (needs internet): the property boundary
+   from Kartverket's open Eiendom API on Kartverket's topographic map with NIBIO's AR5 land
+   types, with the soil sample points and fields drawn on top. The map is cached in the data
+   folder (`kart/`), so the plan PDF can be made again offline; the uploaded NIBIO gårdskart
+   follows it in the PDF. No login or API key; only knr/gnr/bnr/fnr and a map area are sent.
+   `Gjodselplan --karttest` checks that the services can be reached.
 3. **Jordprøver** – soil samples, linked to fields. P-AL can be entered as
    mg P₂O₅/100 g; it is stored as mg P/100 g. Samples need coordinates (§ 29).
    Choose *Standardpakke 1* or *Utvidet analyse*. An extended analysis needs the lab's report as

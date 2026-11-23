@@ -9,7 +9,8 @@
 - Sharing: public repo jwestpla/gjodselplan; pushing a v* tag publishes a Release with Gjodselplan-windows.zip. `.github/workflows/windows-build.yml` does the Windows clean-PATH test.
 - The schema is frozen since Phase 1: ask before changing it, and write a migration.
   Migration 2 (v0.1.2, approved by the user): soil_sample.origin 'norsk' | 'utenlandsk'.
-- Not started (PLAN §10 "Later", ask first): map view, lab report import, liming, fertigation split, Ldir export.
+- Generated farm map (eiendomskart) built on the user's request (v0.1.4, see decisions). Not started (PLAN §10
+  "Later", ask first): lab report import, liming, fertigation split, Ldir export.
 
 ## Environment
 - Use the project venv: `.venv/bin/python app.py`, `.venv/bin/python -m pytest` (python.org 3.11 + reportlab).
@@ -69,3 +70,13 @@
 - Gjødslingsplan tab (v0.1.1) is laid out for a 1366×768 laptop at 125 % (Tk sees ~1093×614): context-dependent
   header buttons, one-line status strip with collapsible warnings, field detail in sub-tabs (Gjødsling / Sesong /
   Beregning), sash sized to the detail's needs. Treeview rowheight = font linespace + 6 (window-wide).
+- Eiendomskart (generated farm map, `farm_map.py` pure + network, `map_service.py`, `ui/map_dialog.py`):
+  boundary from Kartverket Eiendom API (`geokoding`, omrade=true, fetched in EPSG:4258), background Kartverket
+  topo/topograatone WMS + NIBIO `ar5forvaltning2` (open; NOT `cgi-bin/ar5`, which is Norge digitalt begrenset).
+  No open aerial photo exists (Norge i bilder needs GeoID). WGS84→UTM is pure Python (`geo.wgs84_to_utm`, Krüger,
+  tested against Kartverket's transformation API); zone 32/33/35 by longitude. Cache per property in
+  `<data>/kart/<eid>/eiendom_<pid>/` (bakgrunn.jpg + kart.json); points are placed at draw time (vector overlay in
+  Tk and PDF). `build_view`/`finalize` take `data_dir=` (None = no maps); finalize copies the background to
+  `attachments/<eid>/planer/`. A generated map satisfies the kartskisse warning; the uploaded NIBIO map follows it
+  in the PDF. Network runs in a worker thread (`run_in_background`); offline gives a message. macOS python.org has
+  no CA store: `farm_map._context` falls back to /etc/ssl/cert.pem. `--karttest` (workflow, continue-on-error).

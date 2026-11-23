@@ -8,6 +8,7 @@ __pycache__/
 data/gjodselplan.db
 data/gjodselplan.db-journal
 data/attachments/
+data/kart/
 data/backups/
 data/export/
 
