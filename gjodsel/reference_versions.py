@@ -1,4 +1,5 @@
-"""Fingerprints (sha256) of reference CSVs shipped in earlier versions.
+"""Fingerprints of reference CSVs shipped in earlier versions (config.reference_fingerprint: sha256 with
+line endings normalised to LF, since Windows builds ship the files with CRLF).
 
 An installed reference file that is still identical to one of these was never edited by the advisor, so a
 newer bundled version may replace it (config.update_reference_files). Edited files are never overwritten.

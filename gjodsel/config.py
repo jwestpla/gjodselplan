@@ -104,10 +104,15 @@ def ensure_dirs(paths: Paths) -> None:
 REFERENCE_UPDATED_NOTE = "Referansedata er oppdatert til ny versjon"
 
 
-def _sha256(path: Path) -> str:
+def reference_fingerprint(data: bytes) -> str:
+    """sha256 with line endings normalised: Windows builds check the CSVs out with CRLF, git stores LF."""
     import hashlib
 
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    return hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
+
+
+def _sha256(path: Path) -> str:
+    return reference_fingerprint(path.read_bytes())
 
 
 def update_reference_files(source: Path, target: Path) -> list[str]:
