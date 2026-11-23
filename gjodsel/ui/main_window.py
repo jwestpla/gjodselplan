@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import tkinter as tk
+import tkinter.font as tkfont
 from datetime import date
 from tkinter import messagebox, simpledialog, ttk
 
@@ -48,7 +49,10 @@ class MainWindow(tk.Tk):
         width = min(1200, self.winfo_screenwidth() - 40)
         height = min(760, self.winfo_screenheight() - 90)  # leave room for the Windows taskbar
         self.geometry(f"{width}x{height}+20+10")
-        self.minsize(900, 560)
+        self.minsize(min(800, width), min(500, height))
+        # Rows tall enough for the font, so text isn't clipped on scaled (125 %+) Windows screens.
+        linespace = tkfont.nametofont("TkDefaultFont").metrics("linespace")
+        ttk.Style(self).configure("Treeview", rowheight=linespace + 6)
         self.columnconfigure(1, weight=1)
         self.rowconfigure(0, weight=1)
 
@@ -106,8 +110,8 @@ class MainWindow(tk.Tk):
 
         ttk.Label(side, text="Foretak", font=("TkDefaultFont", 0, "bold")).grid(row=0, column=0, sticky="w")
         ttk.Label(side, text="Søk").grid(row=1, column=0, sticky="w", pady=(4, 0))
-        ttk.Entry(side, textvariable=self.search_var, width=28).grid(row=2, column=0, sticky="ew", pady=(0, 4))
-        self.enterprise_list = tk.Listbox(side, width=30, exportselection=False)
+        ttk.Entry(side, textvariable=self.search_var, width=22).grid(row=2, column=0, sticky="ew", pady=(0, 4))
+        self.enterprise_list = tk.Listbox(side, width=24, exportselection=False)
         self.enterprise_list.grid(row=3, column=0, sticky="nsew")
         self.enterprise_list.bind("<<ListboxSelect>>", self._on_sidebar_select)
 

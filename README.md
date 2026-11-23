@@ -98,6 +98,12 @@ Review `git diff` and run the tests before committing.
    fields. "Åpne i Gårdskart" copies `knr/gnr/bnr/fnr/snr` to the clipboard.
 3. **Jordprøver** – soil samples, linked to fields. P-AL can be entered as
    mg P₂O₅/100 g; it is stored as mg P/100 g. Samples need coordinates (§ 29).
+
+   Coordinates (fields and soil samples): *Åpne Google Maps* opens satellite view
+   at the field or farm; right-click the spot and click the numbers at the top of
+   the menu (Google copies them), then *Lim inn koordinater* – or just paste into
+   Breddegrad. Pasted Google Maps links and degrees/minutes/seconds also work
+   (`gjodsel/geo.py`). No API key.
 4. **Gjødslingsplan** – choose the year in the sidebar and press *Opprett plan*
    (or *Kopier fra fjorår*). Per field: season inputs, the requirement with
    its full calculation, overrides (reason required), planned fertilizing

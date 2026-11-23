@@ -8,19 +8,22 @@ from tkinter import messagebox, simpledialog, ttk
 from typing import TYPE_CHECKING
 
 from .. import plan_service as ps
+from ..calc import NO_VALID_SOIL
 from .. import repo
 from ..models import Application, Plan
 from ..plan_view import AppLine, FieldRow, PlanView
 from ..soil import sample_validity
 from ..units import format_date, format_number, format_signed, parse_date, parse_number
 from ..validation import ValidationError
-from .widgets import AMBER, GREEN, GREY, RED, EditDialog, Form, button_row, scrolled_tree, show_errors
+from .widgets import AMBER, GREEN, GREY, RED, EditDialog, Form, scrolled_tree, show_errors, stripe
 
 if TYPE_CHECKING:
     from .main_window import MainWindow
 
 _BALANCE_COLOURS = {"ok": GREEN, "under": AMBER, "over": RED}
-_BALANCE_TEXT = {"ok": "ok", "under": "under behov", "over": "over behov"}
+_BALANCE_TEXT = {"ok": "ok", "under": "under", "over": "over"}
+_NPK = ("n", "p", "k")
+_BOLD = ("TkDefaultFont", 0, "bold")
 _SEASON_KEYS = ("expected_yield_kg_daa", "growth_class", "forgrode", "soil_sample_id",
                 "override_n", "override_p", "override_k", "override_reason", "notes")
 
@@ -31,8 +34,12 @@ def serious(warnings: list[str]) -> list[str]:
 
 
 class PlanTab(ttk.Frame):
+    """Layout, top to bottom: header (title, version, the actions that apply now) · status strip
+    (legal status, P check, warnings toggle) · field table · the selected field in three sub-tabs.
+    Built to fit a small laptop screen (~800×450 for the tab)."""
+
     def __init__(self, master, app: MainWindow):
-        super().__init__(master, padding=8)
+        super().__init__(master, padding=(8, 6))
         self.app = app
         self.plan: Plan | None = None
         self.view: PlanView | None = None
@@ -40,115 +47,169 @@ class PlanTab(ttk.Frame):
         self.highlight: set[int] = set()  # field ids whose stage changed after "Kopier fra fjorår"
         self._previous_selection: tuple = ()
         self._context_key: tuple = ()
+        self._warnings_open = False
+        self._warning_count = 0
+        self._serious = False
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(2, weight=1)
+        self.rowconfigure(3, weight=1)
+        ttk.Style(self).configure("Warn.TButton", foreground=RED)
 
-        top = ttk.Frame(self)
-        top.grid(row=0, column=0, sticky="ew")
-        self.title_label = ttk.Label(top, text="", font=("TkDefaultFont", 0, "bold"))
+        header = ttk.Frame(self)
+        header.grid(row=0, column=0, sticky="ew")
+        self.title_label = ttk.Label(header, text="", font=_BOLD)
         self.title_label.pack(side="left")
         self.version_var = tk.StringVar()
-        self.version_combo = ttk.Combobox(top, textvariable=self.version_var, state="readonly", width=16)
-        self.version_combo.pack(side="left", padx=8)
+        self.version_combo = ttk.Combobox(header, textvariable=self.version_var, state="readonly", width=20)
         self.version_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_version_selected())
-        self.buttons = button_row(top, [
-            ("Opprett plan", self.create_plan),
-            ("Beregn alle", self.recalculate),
-            ("Kopier fra fjorår", self.copy_last_year),
-            ("Bruk mal…", self.use_template),
-            ("Legg til nye skifter", self.add_fields),
-            ("Ferdigstill", self.finalize),
-            ("Ny versjon…", self.new_version),
-            ("Eksporter PDF", self.export_pdf),
-        ])
-        self.buttons.pack(side="left", padx=(8, 0))
+        self.action_frame = ttk.Frame(header)
+        self.action_frame.pack(side="right")
+        self.actions = {
+            key: ttk.Button(self.action_frame, text=text, command=command)
+            for key, text, command in (
+                ("create", "Opprett plan", self.create_plan),
+                ("copy", "Kopier fra fjorår", self.copy_last_year),
+                ("recalc", "Beregn alle", self.recalculate),
+                ("add_fields", "Legg til skifter", self.add_fields),
+                ("finalize", "Ferdigstill…", self.finalize),
+                ("new_version", "Ny versjon…", self.new_version),
+                ("pdf", "Eksporter PDF", self.export_pdf),
+            )
+        }
 
-        self.warning_text = tk.Text(self, height=4, wrap="word", font="TkDefaultFont", relief="flat")
-        self.warning_text.grid(row=1, column=0, sticky="ew", pady=(6, 6))
-        self.warning_text.tag_configure("red", foreground=RED)
-        self.warning_text.tag_configure("amber", foreground=AMBER)
-        self.warning_text.tag_configure("green", foreground=GREEN)
-        self.warning_text.tag_configure("bold", font=("TkDefaultFont", 0, "bold"))
+        strip = ttk.Frame(self)
+        strip.grid(row=1, column=0, sticky="ew", pady=(4, 2))
+        strip.columnconfigure(2, weight=1)
+        self.legal_label = ttk.Label(strip, text="")
+        self.legal_label.grid(row=0, column=0, sticky="w")
+        self.p_label = ttk.Label(strip, text="")
+        self.p_label.grid(row=0, column=1, sticky="w", padx=(16, 0))
+        self.warn_button = ttk.Button(strip, text="", command=self._toggle_warnings)
 
-        panes = ttk.PanedWindow(self, orient="vertical")
-        panes.grid(row=2, column=0, sticky="nsew")
+        self.warning_frame = ttk.Frame(self)
+        self.warning_frame.columnconfigure(0, weight=1)
+        self.warning_text = tk.Text(self.warning_frame, height=4, wrap="word", font="TkDefaultFont",
+                                    relief="flat", borderwidth=0, padx=6, pady=4)
+        ys = ttk.Scrollbar(self.warning_frame, orient="vertical", command=self.warning_text.yview)
+        self.warning_text.configure(yscrollcommand=ys.set)
+        self.warning_text.grid(row=0, column=0, sticky="ew")
+        ys.grid(row=0, column=1, sticky="ns")
+        for tag, colour in (("red", RED), ("amber", AMBER)):
+            self.warning_text.tag_configure(tag, foreground=colour)
+
+        panes = self.panes = ttk.PanedWindow(self, orient="vertical")
+        panes.grid(row=3, column=0, sticky="nsew")
+        panes.bind("<Configure>", lambda _e: self.after_idle(self._place_sash))
 
         tree_frame, self.tree = scrolled_tree(panes, [
-            ("no", "Nr.", 45), ("name", "Navn", 130), ("culture", "Kultur", 110), ("area", "Daa", 55),
-            ("stage", "Stadium", 75), ("req_n", "Behov N", 65), ("req_p", "P", 50), ("req_k", "K", 50),
-            ("pl_n", "Planlagt N", 75), ("pl_p", "P", 50), ("pl_k", "K", 50), ("p_status", "P-status", 70),
-            ("warn", "Varsler", 65),
-        ], height=7, numeric=("area", "req_n", "req_p", "req_k", "pl_n", "pl_p", "pl_k"))
+            ("no", "Nr", 36), ("name", "Skifte", 130), ("culture", "Kultur", 90), ("area", "Daa", 50),
+            ("req_n", "Behov N", 60), ("req_p", "Behov P", 60), ("req_k", "Behov K", 60),
+            ("pl_n", "Plan N", 56), ("pl_p", "Plan P", 56), ("pl_k", "Plan K", 56),
+            ("p_status", "P-grense", 64), ("remark", "Merknad", 170),
+        ], height=6, numeric=("area", "req_n", "req_p", "req_k", "pl_n", "pl_p", "pl_k"), xscroll=True)
+        _fixed_width(self.tree, keep_stretch=("name", "remark"))
         panes.add(tree_frame, weight=1)
         for tag, colour in (("p_over", RED), ("soil", AMBER), ("unfertilized", GREY)):
             self.tree.tag_configure(tag, foreground=colour)
         self.tree.tag_configure("stage_changed", background="#fff3c4")
         self.tree.bind("<<TreeviewSelect>>", lambda _e: self._show_detail())
 
-        detail = ttk.Frame(panes)
+        detail = self.detail = ttk.Frame(panes)
         panes.add(detail, weight=2)
-        detail.columnconfigure(1, weight=1)
-        detail.rowconfigure(0, weight=1)
+        detail.columnconfigure(0, weight=1)
+        detail.rowconfigure(1, weight=1)
+        self.detail_label = ttk.Label(detail, text="", font=_BOLD)
+        self.detail_label.grid(row=0, column=0, sticky="w", pady=(4, 2))
+        self.sub = ttk.Notebook(detail)
+        self.sub.grid(row=1, column=0, sticky="nsew")
+        self.sub.add(self._build_fertilizing_tab(), text="Gjødsling")
+        self.sub.add(self._build_season_tab(), text="Sesong")
+        self.sub.add(self._build_calc_tab(), text="Beregning")
 
-        season_box = ttk.LabelFrame(detail, text="Sesong", padding=6)
-        season_box.grid(row=0, column=0, sticky="nsw")
-        f = self.season_form = Form(season_box)
-        f.pack(anchor="nw")
+    def _build_fertilizing_tab(self) -> ttk.Frame:
+        frame = ttk.Frame(self.sub, padding=(6, 4))
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(0, weight=1)
+        tree_frame, self.app_tree = scrolled_tree(frame, [
+            ("timing", "Tidspunkt", 140), ("product", "Produkt", 180), ("kg", "kg/daa", 60), ("n", "N", 52),
+            ("p", "P", 52), ("k", "K", 52), ("total", "Totalt kg", 72), ("note", "Notat", 120),
+        ], height=4, numeric=("kg", "n", "p", "k", "total"), xscroll=True)
+        _fixed_width(self.app_tree, keep_stretch=("product", "note"))
+        tree_frame.grid(row=0, column=0, sticky="nsew")
+        self.app_tree.bind("<Double-1>", lambda _e: self.edit_application())
+        # Buttons in a column to the right, the balance under the table: fits narrow windows.
+        self.app_buttons = ttk.Frame(frame)
+        self.app_buttons.grid(row=0, column=1, rowspan=2, sticky="n", padx=(8, 0))
+        for text, command in (("Legg til", self.add_application), ("Rediger", self.edit_application),
+                              ("Slett", self.delete_application), ("Bruk mal…", self.use_template)):
+            ttk.Button(self.app_buttons, text=text, command=command).pack(fill="x", pady=(0, 2))
+        self.balance_grid = _NpkGrid(frame, ("Behov", "Planlagt", "Balanse"), width=10)
+        self.balance_grid.grid(row=1, column=0, sticky="w", pady=(6, 0))
+        return frame
+
+    def _build_season_tab(self) -> ttk.Frame:
+        frame = ttk.Frame(self.sub, padding=(6, 4))
+        f = self.season_form = Form(frame, columns=2)
+        f.grid(row=0, column=0, sticky="nw")
         f.check("fertilized", "Gjødsles i år")
-        f.entry("expected_yield_kg_daa", "Forventet avling (kg/daa)", width=10)
-        f.combo("growth_class", "Nyvekst", [], width=22)
-        f.entry("forgrode", "Forgrøde", width=24)
-        f.combo("soil_sample_id", "Jordprøve", [], width=30)
-        f.entry("override_n", "Overstyr N (kg/daa)", width=8)
-        f.entry("override_p", "Overstyr P (kg/daa)", width=8)
-        f.entry("override_k", "Overstyr K (kg/daa)", width=8)
-        f.entry("override_reason", "Begrunnelse for overstyring", width=30)
-        f.text("notes", "Notater", height=2, width=30)
-        self.save_season_button = ttk.Button(season_box, text="Lagre sesong", command=self.save_season)
-        self.save_season_button.pack(anchor="w", pady=(6, 0))
+        f.entry("expected_yield_kg_daa", "Avling (kg/daa)", width=10)
+        f.combo("growth_class", "Nyvekst", [], width=15)
+        f.entry("forgrode", "Forgrøde", width=17)
+        f.combo("soil_sample_id", "Jordprøve", [], width=20)
+        f.entries("Overstyrt", [("override_n", "N"), ("override_p", "P"), ("override_k", "K")], width=5, column=1)
+        f.entry("override_reason", "Begrunnelse", width=18, column=1)
+        f.text("notes", "Notater", height=1, width=18, column=1)
+        self.save_season_button = ttk.Button(f, text="Lagre sesong", command=self.save_season)
+        f.custom("save", "", self.save_season_button, column=1)
+        return frame
 
-        calc_box = ttk.LabelFrame(detail, text="Behov og begrunnelse", padding=6)
-        calc_box.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
-        calc_box.columnconfigure(0, weight=1)
-        calc_box.rowconfigure(0, weight=1)
-        self.calc_text = tk.Text(calc_box, wrap="word", height=12, font="TkDefaultFont")
+    def _build_calc_tab(self) -> ttk.Frame:
+        frame = ttk.Frame(self.sub, padding=(6, 4))
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(0, weight=1)
+        steps_frame, self.steps_tree = scrolled_tree(frame, [
+            ("nutrient", "", 30), ("step", "Steg", 200), ("delta", "Endring", 64), ("after", "Etter", 56),
+        ], height=6, numeric=("delta", "after"), xscroll=True)
+        _fixed_width(self.steps_tree, keep_stretch=("step",))
+        steps_frame.grid(row=0, column=0, sticky="nsew")
+        right = ttk.Frame(frame)
+        right.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+        right.columnconfigure(0, weight=1)
+        right.rowconfigure(1, weight=1)
+        self.req_grid = _NpkGrid(right, ("Beregnet", "Overstyrt", "Gjeldende"), width=6)
+        self.req_grid.grid(row=0, column=0, sticky="nw")
+        text_frame = ttk.Frame(right)
+        text_frame.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
+        text_frame.columnconfigure(0, weight=1)
+        text_frame.rowconfigure(0, weight=1)
+        self.calc_text = tk.Text(text_frame, height=5, width=30, wrap="word", font="TkDefaultFont",
+                                 relief="flat", borderwidth=0, padx=4, pady=2)
+        ys = ttk.Scrollbar(text_frame, orient="vertical", command=self.calc_text.yview)
+        self.calc_text.configure(yscrollcommand=ys.set)
         self.calc_text.grid(row=0, column=0, sticky="nsew")
-        self.calc_text.tag_configure("bold", font=("TkDefaultFont", 0, "bold"))
+        ys.grid(row=0, column=1, sticky="ns")
+        self.calc_text.tag_configure("bold", font=_BOLD)
         self.calc_text.tag_configure("red", foreground=RED)
         self.calc_text.tag_configure("amber", foreground=AMBER)
+        return frame
 
-        app_box = ttk.LabelFrame(detail, text="Planlagt gjødsling", padding=6)
-        app_box.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
-        app_box.columnconfigure(0, weight=1)
-        frame, self.app_tree = scrolled_tree(app_box, [
-            ("timing", "Tidspunkt", 150), ("product", "Produkt", 200), ("kg", "kg/daa", 60), ("n", "N", 50),
-            ("p", "P", 50), ("k", "K", 50), ("total", "Totalt kg", 75), ("note", "Notat", 160),
-        ], height=4, numeric=("kg", "n", "p", "k", "total"))
-        frame.grid(row=0, column=0, sticky="ew")
-        self.app_tree.bind("<Double-1>", lambda _e: self.edit_application())
-        bottom = ttk.Frame(app_box)
-        bottom.grid(row=1, column=0, sticky="ew", pady=(6, 0))
-        self.app_buttons = button_row(bottom, [
-            ("Legg til", self.add_application),
-            ("Rediger", self.edit_application),
-            ("Slett", self.delete_application),
-        ])
-        self.app_buttons.pack(side="left")
-        self.balance_labels = {n: tk.Label(bottom, text="") for n in ("n", "p", "k")}
-        for label in self.balance_labels.values():
-            label.pack(side="left", padx=(16, 0))
+    def _place_sash(self) -> None:
+        """Give the field detail the height it asks for; the field table keeps the rest (at least ~5 rows)."""
+        total = self.panes.winfo_height()
+        if total < 100:
+            return
+        floor = min(120, total // 2)
+        self.panes.sashpos(0, max(total - self.detail.winfo_reqheight(), floor))
 
     # --- Loading -------------------------------------------------------------------
 
     def _context(self):
-        """(ref, settings) or None with a message in the warning box."""
+        """(ref, settings) or None with a message in the status strip."""
         if self.app.ref is None:
-            self._set_warnings([("Referansedata er ikke lastet – rett feilene i referansefilene og start på nytt.",
-                                 "red")])
+            self._set_message("Referansedata er ikke lastet – rett feilene i referansefilene og start på nytt.", RED)
             return None
         settings = self.app.settings()
         if settings is None:
-            self._set_warnings([("Innstillingene er ugyldige – se Innstillinger.", "red")])
+            self._set_message("Innstillingene er ugyldige – se Innstillinger.", RED)
             return None
         return self.app.ref, settings
 
@@ -163,20 +224,20 @@ class PlanTab(ttk.Frame):
         eid, year = self.app.enterprise_id, self.app.year
         if eid is None:
             self.title_label.configure(text="Velg et foretak.")
-            self.version_combo.configure(values=[])
-            self.version_var.set("")
-            self._set_warnings([])
+            self._show_versions([])
+            self._show_actions(())
+            self._set_message("")
             self._show_detail()
             return
         plans = repo.list_plans(self.app.conn, eid, year)
-        self.version_combo.configure(values=[self._version_label(p) for p in plans])
+        self._show_versions(plans)
         if self.selected_plan_id not in {p.id for p in plans}:
             self.selected_plan_id = plans[-1].id if plans else None
         self.plan = next((p for p in plans if p.id == self.selected_plan_id), None)
         if self.plan is None:
             self.title_label.configure(text=f"Ingen plan for {year}")
-            self.version_var.set("")
-            self._set_warnings([(f"Trykk «Opprett plan» eller «Kopier fra fjorår» for å lage planen for {year}.", "")])
+            self._show_actions(("create", "copy"))
+            self._set_message(f"Trykk «Opprett plan» eller «Kopier fra fjorår» for å lage planen for {year}.")
             self._show_detail()
             return
         self.version_var.set(self._version_label(self.plan))
@@ -184,6 +245,10 @@ class PlanTab(ttk.Frame):
         state = "ferdigstilt" if self.plan.finished else "utkast"
         self.title_label.configure(
             text=f"Plan {year} · versjon {self.plan.version} · {state}" + ("" if newest else " (eldre versjon)"))
+        if not self.plan.finished:
+            self._show_actions(("recalc", "add_fields", "finalize", "pdf"))
+        else:
+            self._show_actions(("new_version", "pdf") if newest else ("pdf",))
 
         context = self._context()
         if context is None:
@@ -192,15 +257,30 @@ class PlanTab(ttk.Frame):
         try:
             self.view = ps.build_view(self.app.conn, ref, settings, self.plan)
         except ValidationError as exc:
-            self._set_warnings([(e, "red") for e in exc.errors])
+            self._set_message(exc.errors[0], RED)
             return
         self._fill_tree()
-        self._fill_warnings()
+        self._fill_status()
         self._show_detail()
 
     @staticmethod
     def _version_label(p: Plan) -> str:
         return f"Versjon {p.version} ({p.status})"
+
+    def _show_versions(self, plans: list[Plan]) -> None:
+        """The version selector is only shown when there is something to choose between."""
+        self.version_combo.configure(values=[self._version_label(p) for p in plans])
+        if len(plans) > 1:
+            self.version_combo.pack(side="left", padx=(10, 0))
+        else:
+            self.version_combo.pack_forget()
+            self.version_var.set("")
+
+    def _show_actions(self, keys: tuple[str, ...]) -> None:
+        for button in self.actions.values():
+            button.pack_forget()
+        for key in keys:
+            self.actions[key].pack(side="left", padx=(6, 0))
 
     def _on_version_selected(self) -> None:
         plans = repo.list_plans(self.app.conn, self.app.enterprise_id, self.app.year)
@@ -221,36 +301,94 @@ class PlanTab(ttk.Frame):
             if r.field_id in self.highlight:
                 tags.append("stage_changed")
             req = [format_number(r.effective[n], empty="–") + ("*" if r.override[n] is not None else "")
-                   for n in ("n", "p", "k")]
-            planned = [format_number(r.planned_supply[n], empty="?") for n in ("n", "p", "k")]
-            p_status = "–" if r.p_over_field_limit is None else ("OVER" if r.p_over_field_limit else "OK")
-            n_warn = len(serious(r.warnings))
+                   for n in _NPK]
+            planned = ([format_number(r.planned_supply[n], empty="?") for n in _NPK] if r.fertilized
+                       else ["–"] * 3)
+            if not r.fertilized or r.p_over_field_limit is None:
+                p_status = "–"
+            else:
+                p_status = "OVER" if r.p_over_field_limit else "OK"
             self.tree.insert("", "end", iid=str(r.season_id), tags=tags, values=(
-                r.field_no, r.name, r.culture_name, format_number(r.area_daa), r.stage or "–", *req, *planned,
-                p_status if r.fertilized else "ikke gjødslet", f"⚠ {n_warn}" if n_warn else "",
+                r.field_no, r.name, r.culture_name, format_number(r.area_daa), *req, *planned, p_status,
+                self._remark(r),
             ))
+        stripe(self.tree, skip=("stage_changed",))
         if selection and self.tree.exists(selection[0]):
             self.tree.selection_set(selection[0])
         elif self.view.rows:
             self.tree.selection_set(str(self.view.rows[0].season_id))
 
-    def _fill_warnings(self) -> None:
+    def _remark(self, r: FieldRow) -> str:
+        """The most important things about a field, in words (full list under «Beregning»)."""
+        if not r.fertilized:
+            return "Ikke gjødslet"
+        parts = []
+        if r.field_id in self.highlight:
+            parts.append("Nytt stadium")
+        if r.p_over_field_limit:
+            parts.append("P over grensen")
+        if not r.soil_valid:
+            parts.append("Mangler gyldig jordprøve")
+        if any(v is not None for v in r.override.values()):
+            parts.append("Overstyrt")
+        others = [w for w in serious(r.warnings) if not w.startswith(NO_VALID_SOIL)]
+        if others:
+            parts.append(f"{len(others)} {'varsel' if len(others) == 1 else 'varsler'}")
+        return ", ".join(parts)
+
+    def _fill_status(self) -> None:
         v = self.view
-        lines = [(f"{v.legal_text} · {format_number(v.fertilized_area)} daa gjødslet", "bold"),
-                 (v.p_summary, "green" if v.p_ok else ("red" if v.p_ok is False else "amber"))]
+        # Compact texts; the full wording is in the window's status bar and in the PDF.
+        area = format_number(v.fertilized_area)
+        legal = (f"Plan påkrevd · {area} daa gjødslet" if v.plan_required
+                 else f"Plan ikke påkrevd · {area} daa gjødslet · journal påkrevd")
+        self.legal_label.configure(text=legal, foreground="")
+        if v.p_limit is None or v.p_average is None:
+            p_text = "P-sjekk: " + ("ingen P-grense funnet" if v.p_limit is None else "planlagt P ukjent")
+        else:
+            p_text = (f"P-sjekk {'OK' if v.p_ok else 'BRUDD'}: snitt {format_number(v.p_average, 2)} av maks "
+                      f"{format_number(v.p_limit)} kg/daa")
+        self.p_label.configure(text=p_text, foreground=GREEN if v.p_ok else (RED if v.p_ok is False else AMBER))
+        lines = []
         if v.change_reason:
             lines.append((f"Endringsbegrunnelse (versjon {v.version}): {v.change_reason}", ""))
-        for w in v.warnings:
-            lines.append((f"⚠ {w}", "amber" if w.startswith(ps.UNVERIFIED_WARNING) else "red"))
-        self._set_warnings(lines)
-
-    def _set_warnings(self, lines: list[tuple[str, str]]) -> None:
+        lines += [(f"⚠ {w}", "amber" if w.startswith(ps.UNVERIFIED_WARNING) else "red") for w in v.warnings]
         t = self.warning_text
         t.configure(state="normal")
         t.delete("1.0", "end")
         for text, tag in lines:
             t.insert("end", text + "\n", tag)
-        t.configure(state="disabled", height=max(2, min(len(lines), 7)))
+        t.configure(state="disabled")
+        self._warning_count = len(v.warnings)
+        self._serious = any(not w.startswith(ps.UNVERIFIED_WARNING) for w in v.warnings)
+        self._update_warn_button()
+
+    def _set_message(self, text: str, colour: str = "") -> None:
+        """A single message in the status strip (no plan, or the plan can't be shown)."""
+        self.legal_label.configure(text=text, foreground=colour)
+        self.p_label.configure(text="")
+        self._warning_count = 0
+        self._warnings_open = False
+        self._update_warn_button()
+
+    def _toggle_warnings(self) -> None:
+        self._warnings_open = not self._warnings_open
+        self._update_warn_button()
+
+    def _update_warn_button(self) -> None:
+        if not self._warning_count:
+            self.warn_button.grid_remove()
+            self.warning_frame.grid_remove()
+            return
+        noun = "varsel" if self._warning_count == 1 else "varsler"
+        self.warn_button.configure(
+            text=f"Skjul {noun}" if self._warnings_open else f"⚠ {self._warning_count} {noun} – vis",
+            style="Warn.TButton" if self._serious else "TButton")
+        self.warn_button.grid(row=0, column=3, sticky="e")
+        if self._warnings_open:
+            self.warning_frame.grid(row=2, column=0, sticky="ew", pady=(0, 6))
+        else:
+            self.warning_frame.grid_remove()
 
     def _selected_row(self) -> FieldRow | None:
         selection = self.tree.selection()
@@ -263,12 +401,19 @@ class PlanTab(ttk.Frame):
     def _show_detail(self) -> None:
         row = self._selected_row()
         editable = row is not None and self.plan is not None and not self.plan.finished
+        if row is None:
+            self.detail_label.configure(text="Velg et skifte i tabellen." if self.view else "")
+        else:
+            variety = f" / {row.variety}" if row.variety else ""
+            self.detail_label.configure(
+                text=f"Skifte {row.label} · {row.culture_name}{variety} · {format_number(row.area_daa)} daa · "
+                     f"{row.stage or 'stadium ukjent'} · Jordprøve: {row.soil_sample_text}")
         self._fill_season_form(row)
         self.season_form.set_enabled(editable)
         self.save_season_button.state(["!disabled"] if editable else ["disabled"])
         for child in self.app_buttons.winfo_children():
             child.state(["!disabled"] if editable else ["disabled"])
-        self._fill_calc_text(row)
+        self._fill_calc(row)
         self._fill_applications(row)
 
     def _fill_season_form(self, row: FieldRow | None) -> None:
@@ -297,61 +442,59 @@ class PlanTab(ttk.Frame):
         f.set("growth_class", row.growth_class or "")
         f.set("forgrode", row.forgrode)
         f.set("soil_sample_id", str(row.soil_sample_id) if row.soil_sample_id else "")
-        for n in ("n", "p", "k"):
+        for n in _NPK:
             f.set(f"override_{n}", row.override[n])
         f.set("override_reason", row.override_reason)
         f.set("notes", row.notes)
 
-    def _fill_calc_text(self, row: FieldRow | None) -> None:
+    def _fill_calc(self, row: FieldRow | None) -> None:
+        self.steps_tree.delete(*self.steps_tree.get_children())
+        self.req_grid.clear()
         t = self.calc_text
         t.configure(state="normal")
         t.delete("1.0", "end")
         if row is not None:
-            t.insert("end", f"{row.label} · {row.culture_name} · {format_number(row.area_daa)} daa · "
-                            f"stadium {row.stage or '–'}\n", "bold")
-            t.insert("end", f"Jordprøve: {row.soil_sample_text}\n\n")
-            t.insert("end", "Behov (kg/daa)        N      P      K\n", "bold")
-            t.insert("end", _npk_line("Beregnet", row.req))
-            if any(v is not None for v in row.override.values()):
-                t.insert("end", _npk_line("Overstyrt", row.override))
-                t.insert("end", f"   Begrunnelse: {row.override_reason}\n")
-            t.insert("end", _npk_line("Gjeldende", row.effective), "bold")
-            t.insert("end", _npk_line("Planlagt", row.planned_supply))
-            t.insert("end", "\nBeregning\n", "bold")
-            for s in row.steps:
-                delta = "" if s.kind in ("start", "note") else f" ({format_signed(s.delta)})"
-                t.insert("end", f"  {s.nutrient}: {s.label_nb}{delta} → {format_number(s.value_after)}\n")
-            if row.rationale:
-                t.insert("end", "\nTekst i planen\n", "bold")
-                t.insert("end", row.rationale + "\n")
-            if row.warnings:
-                t.insert("end", "\nVarsler\n", "bold")
-                for w in row.warnings:
-                    t.insert("end", f"⚠ {w}\n", "red" if w in serious(row.warnings) else "amber")
+            for i, s in enumerate(row.steps):
+                delta = "" if s.kind in ("start", "note") else format_signed(s.delta)
+                self.steps_tree.insert("", "end", iid=str(i), values=(
+                    s.nutrient, s.label_nb, delta, format_number(s.value_after)))
+            stripe(self.steps_tree)
+            self.req_grid.set("Beregnet", {n: format_number(row.req[n], empty="–") for n in _NPK})
+            self.req_grid.set("Overstyrt", {n: format_number(row.override[n], empty="") for n in _NPK})
+            self.req_grid.set("Gjeldende", {n: format_number(row.effective[n], empty="–") for n in _NPK}, bold=True)
+            if row.override_reason:
+                t.insert("end", "Begrunnelse for overstyring: ", "bold")
+                t.insert("end", row.override_reason + "\n\n")
+            for w in row.warnings:
+                t.insert("end", f"⚠ {w}\n", "red" if w in serious(row.warnings) else "amber")
             if row.soil_notes:
                 t.insert("end", "\nJordstatus (påvirker ikke tallene)\n", "bold")
                 for note in row.soil_notes:
                     t.insert("end", f"• {note}\n")
+            if row.rationale:
+                t.insert("end", "\nTekst i planen\n", "bold")
+                t.insert("end", row.rationale + "\n")
         t.configure(state="disabled")
 
     def _fill_applications(self, row: FieldRow | None) -> None:
         self.app_tree.delete(*self.app_tree.get_children())
-        for label in self.balance_labels.values():
-            label.configure(text="")
+        self.balance_grid.clear()
         if row is None:
             return
         for line in row.planned:
             self.app_tree.insert("", "end", iid=str(line.id), values=_app_values(line))
-        for n, label in self.balance_labels.items():
+        stripe(self.app_tree)
+        self.balance_grid.set("Behov", {n: format_number(row.effective[n], empty="–") for n in _NPK})
+        self.balance_grid.set("Planlagt", {n: format_number(row.planned_supply[n], empty="ukjent") for n in _NPK})
+        texts, colours = {}, {}
+        for n in _NPK:
             status = row.balance_status[n]
             if status is None:
-                label.configure(text=f"{n.upper()}: balanse ukjent", fg=GREY)
-                continue
-            label.configure(
-                text=f"{n.upper()}: {format_number(row.planned_supply[n])} / {format_number(row.effective[n])} "
-                     f"({format_signed(row.balance[n])}, {_BALANCE_TEXT[status]})",
-                fg=_BALANCE_COLOURS[status],
-            )
+                texts[n], colours[n] = "ukjent", GREY
+            else:
+                texts[n] = f"{format_signed(row.balance[n])} {_BALANCE_TEXT[status]}"
+                colours[n] = _BALANCE_COLOURS[status]
+        self.balance_grid.set("Balanse", texts, colours)
 
     # --- Actions ------------------------------------------------------------------------
 
@@ -530,9 +673,37 @@ class PlanTab(ttk.Frame):
             self.app.data_changed()
 
 
-def _npk_line(label: str, values: dict) -> str:
-    cells = "".join(f"{format_number(values.get(n), empty='–'):>7}" for n in ("n", "p", "k"))
-    return f"  {label:<18}{cells}\n"
+class _NpkGrid(ttk.Frame):
+    """Small table of N, P and K values laid out with labels in a grid, so numbers line up exactly."""
+
+    def __init__(self, master, rows: tuple[str, ...], width: int):
+        super().__init__(master)
+        ttk.Label(self, text="kg/daa", foreground="#666666").grid(row=0, column=0, sticky="w", padx=(0, 12))
+        for c, name in enumerate("NPK", start=1):
+            ttk.Label(self, text=name, font=_BOLD, anchor="e", width=width).grid(row=0, column=c, sticky="e")
+        self.cells: dict[tuple[str, str], ttk.Label] = {}
+        for r, name in enumerate(rows, start=1):
+            ttk.Label(self, text=name).grid(row=r, column=0, sticky="w", padx=(0, 12), pady=1)
+            for c, n in enumerate(_NPK, start=1):
+                cell = ttk.Label(self, text="", anchor="e", width=width)
+                cell.grid(row=r, column=c, sticky="e", pady=1)
+                self.cells[(name, n)] = cell
+
+    def set(self, row: str, values: dict[str, str], colours: dict[str, str] | None = None,
+            bold: bool = False) -> None:
+        for n in _NPK:
+            self.cells[(row, n)].configure(text=values.get(n, ""), foreground=(colours or {}).get(n, ""),
+                                           font=_BOLD if bold else "TkDefaultFont")
+
+    def clear(self) -> None:
+        for cell in self.cells.values():
+            cell.configure(text="", foreground="")
+
+
+def _fixed_width(tree: ttk.Treeview, keep_stretch: tuple[str, ...]) -> None:
+    """Only the text columns grow with the window; number columns keep their width."""
+    for column in tree["columns"]:
+        tree.column(column, stretch=column in keep_stretch)
 
 
 def _app_values(line: AppLine) -> tuple:

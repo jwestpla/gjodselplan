@@ -52,3 +52,8 @@
   review_status has one row per (file, row_key); row keys are codes/stages/bands (`reference_review.row_key`).
   Band edits rename the key; save_session moves the review entry. Edited rows get status "Endret" automatically.
 - "X av Y vurdert": Y = rows with ANTATT/SJEKK ETIKETT source or with any review entry.
+- Coordinates: Google Maps in the browser + paste (`geo.parse_coordinates`, `ui/coordinates.py`), no API key, no
+  embedded map. Short links (maps.app.goo.gl) can't be read offline.
+- Gjødslingsplan tab (v0.1.1) is laid out for a 1366×768 laptop at 125 % (Tk sees ~1093×614): context-dependent
+  header buttons, one-line status strip with collapsible warnings, field detail in sub-tabs (Gjødsling / Sesong /
+  Beregning), sash sized to the detail's needs. Treeview rowheight = font linespace + 6 (window-wide).

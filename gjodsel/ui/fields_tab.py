@@ -11,9 +11,11 @@ from typing import TYPE_CHECKING
 
 from .. import repo
 from ..attachments import open_path, resolve, store_attachment
+from ..geo import google_maps_url
 from ..models import COVER_TYPES, IRRIGATION_TYPES, Field, Property, trees_per_daa
 from ..units import format_number, parse_number
 from ..validation import ValidationError
+from .coordinates import add_coordinate_picker, address_query
 from .widgets import GREY, RED, EditDialog, button_row, scrolled_tree, selected_id, show_errors
 
 if TYPE_CHECKING:
@@ -21,7 +23,6 @@ if TYPE_CHECKING:
 
 GARDSKART_URL = "https://gardskart.nibio.no/search"
 NORGESKART_URL = "https://norgeskart.no/"
-GOOGLE_MAPS_URL = "https://www.google.com/maps?q={lat},{lon}"
 
 MAP_FILETYPES = [("Kart (bilde eller PDF)", "*.png *.jpg *.jpeg *.pdf"), ("Alle filer", "*.*")]
 
@@ -272,14 +273,15 @@ class FieldsTab(ttk.Frame):
     def _field_with_coordinates(self) -> Field | None:
         f = self._selected_field()
         if f and (f.lat is None or f.lon is None):
-            messagebox.showinfo("Kart", "Skiftet har ikke koordinater. Legg dem inn under Rediger.", parent=self)
+            messagebox.showinfo("Kart", "Skiftet har ikke koordinater. Åpne «Rediger» og bruk «Åpne Google Maps» "
+                                        "for å finne dem.", parent=self)
             return None
         return f
 
     def open_google_maps(self) -> None:
         f = self._field_with_coordinates()
         if f:
-            webbrowser.open(GOOGLE_MAPS_URL.format(lat=f.lat, lon=f.lon))
+            webbrowser.open(google_maps_url(f.lat, f.lon))
 
     def open_norgeskart(self) -> None:
         f = self._field_with_coordinates()
@@ -359,6 +361,7 @@ class FieldDialog(EditDialog):
         f.label("trees", "Trær/daa", column=1)
         f.entry("lat", "Breddegrad (WGS84)", width=14, column=1)
         f.entry("lon", "Lengdegrad (WGS84)", width=14, column=1)
+        add_coordinate_picker(f, 1, self._map_fallback)
         f.combo("irrigation", "Vanning", [(v, v) for v in IRRIGATION_TYPES], width=16, column=1)
         f.combo("cover", "Dekke", [(v, v) for v in COVER_TYPES], width=16, column=1)
         f.text("notes", "Notater", width=28, column=1)
@@ -370,6 +373,13 @@ class FieldDialog(EditDialog):
         for key in ("row_spacing_m", "plant_spacing_m"):
             f.var(key).trace_add("write", lambda *_: self._update_trees())
         self._update_trees()
+
+    def _map_fallback(self):
+        """Where to open Google Maps for a field without coordinates: another field, else the farm address."""
+        for other in repo.list_fields(self.app.conn, self.app.enterprise_id):
+            if other.id != self.field.id and other.lat is not None and other.lon is not None:
+                return other.lat, other.lon
+        return address_query(repo.get_enterprise(self.app.conn, self.app.enterprise_id))
 
     def _update_trees(self) -> None:
         try:

@@ -52,6 +52,20 @@ def configure_columns(tree: ttk.Treeview, columns: Sequence[tuple[str, str, int]
         tree.column(key, width=width, minwidth=40, anchor=anchor, stretch=True)
 
 
+STRIPE = "#f2f4f1"
+
+
+def stripe(tree: ttk.Treeview, skip: Iterable[str] = ()) -> None:
+    """Shade every other row. Rows carrying a tag in `skip` keep their own background."""
+    skip = set(skip)
+    tree.tag_configure("stripe", background=STRIPE)
+    for index, iid in enumerate(tree.get_children()):
+        tags = [t for t in tree.item(iid, "tags") if t != "stripe"]
+        if index % 2 and not skip & set(tags):
+            tags.append("stripe")
+        tree.item(iid, tags=tags)
+
+
 def selected_id(tree: ttk.Treeview) -> int | None:
     selection = tree.selection()
     return int(selection[0]) if selection else None
@@ -115,6 +129,24 @@ class Form(ttk.Frame):
         widget = tk.Text(self, height=height, width=width, wrap="word", font="TkDefaultFont")
         self._texts[key] = widget
         self._place(key, label, widget, column, sticky="ew")
+        return widget
+
+    def entries(self, label: str, items: Sequence[tuple[str, str]], width: int = 7, column: int = 0) -> ttk.Frame:
+        """Several short entries on one row, e.g. N / P / K. items: (key, caption before the entry)."""
+        frame = ttk.Frame(self)
+        for i, (key, caption) in enumerate(items):
+            ttk.Label(frame, text=caption).pack(side="left", padx=(0 if i == 0 else 8, 3))
+            var = self._vars[key] = tk.StringVar()
+            entry = ttk.Entry(frame, textvariable=var, width=width)
+            entry.pack(side="left")
+            self.widgets[key] = entry
+            self._labels[key] = f"{label} {caption}"
+        self._place(f"_row_{items[0][0]}", label, frame, column)
+        return frame
+
+    def custom(self, key: str, label: str, widget: tk.Widget, column: int = 0, sticky: str = "w") -> tk.Widget:
+        """Place any widget created with this form as its master (e.g. a row of buttons)."""
+        self._place(key, label, widget, column, sticky)
         return widget
 
     def label(self, key: str, label: str, column: int = 0) -> ttk.Label:

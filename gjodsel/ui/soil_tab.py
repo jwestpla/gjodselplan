@@ -14,6 +14,7 @@ from ..models import SOIL_METHODS, SoilSample
 from ..soil import P_AL_UNIT_P, P_AL_UNIT_P2O5, P_AL_UNITS, SOIL_PARAMETERS, classify, p_al_to_element, sample_validity
 from ..units import format_date, format_plain, parse_date, round_half_up
 from ..validation import ValidationError
+from .coordinates import add_coordinate_picker, address_query
 from .widgets import AMBER, BLUE, GREEN, GREY, RED, EditDialog, button_row, scrolled_tree, selected_id, show_errors
 
 if TYPE_CHECKING:
@@ -225,6 +226,7 @@ class SoilSampleDialog(EditDialog):
         f.entry("depth_to_cm", "Dybde til (cm)", width=8)
         f.entry("lat", "Breddegrad (WGS84)", width=14)
         f.entry("lon", "Lengdegrad (WGS84)", width=14)
+        add_coordinate_picker(f, 0, self._map_fallback)
         f.entry("soil_type", "Jordart")
         f.entry("clay_class", "Leirklasse")
         f.entry("ph", "pH", width=8, column=1)
@@ -254,6 +256,14 @@ class SoilSampleDialog(EditDialog):
             self.field_list.insert("end", f"{fl.field_no} – {fl.name}" + ("" if fl.active else " (inaktiv)"))
             if fl.id in linked:
                 self.field_list.selection_set(index)
+
+    def _map_fallback(self):
+        """Open Google Maps at a field the sample covers (ticked first), else the farm address."""
+        ticked = [self._fields[i] for i in self.field_list.curselection()]
+        for fl in ticked + self._fields:
+            if fl.lat is not None and fl.lon is not None:
+                return fl.lat, fl.lon
+        return address_query(repo.get_enterprise(self.app.conn, self.sample.enterprise_id))
 
     def save(self) -> bool | None:
         f = self.form
