@@ -205,3 +205,31 @@ def test_journal_date_required_and_not_in_future(setup):
     with pytest.raises(ValidationError, match="fram i tid"):
         ps.save_application(conn, ref, Application(field_season_id=s1.id, kind="utfort", product_code="kalksalpeter",
                                                    kg_per_daa=10, date="2999-01-01"))
+
+
+def test_new_sample_offered_to_draft_plans(setup):
+    conn, ref, settings, e, f1, f2 = setup
+    plan = ps.create_plan(conn, ref, settings, e.id, 2026)
+    assert _season(conn, plan, f2.id).soil_sample_id is None
+    new = repo.save_soil_sample(conn, SoilSample(enterprise_id=e.id, sample_date="2026-03-01", p_al=12, k_al=20,
+                                                 lat=61.1, lon=7.5), [])
+    assert ps.sample_plan_updates(conn, settings, new.id) == []  # not linked to anything yet
+
+    repo.set_sample_fields(conn, new.id, [f1.id, f2.id])
+    updates = ps.sample_plan_updates(conn, settings, new.id)
+    assert {f.id for _, _, f in updates} == {f1.id, f2.id}  # f2 had no sample, f1 an older one
+    ps.use_sample_in_drafts(conn, ref, settings, new.id, updates)
+    assert _season(conn, plan, f2.id).soil_sample_id == new.id
+    assert ps.build_view(conn, ref, settings, plan).row(_season(conn, plan, f2.id).id).soil_valid
+    assert ps.sample_plan_updates(conn, settings, new.id) == []  # already in use
+
+    older = repo.save_soil_sample(conn, SoilSample(enterprise_id=e.id, sample_date="2024-03-01", p_al=5), [f1.id])
+    assert ps.sample_plan_updates(conn, settings, older.id) == []  # a newer valid sample is in use
+    other_method = repo.save_soil_sample(conn, SoilSample(enterprise_id=e.id, sample_date="2026-05-01",
+                                                          method="annet"), [f2.id])
+    assert ps.sample_plan_updates(conn, settings, other_method.id) == []  # not valid for the calculation
+
+    ps.finalize(conn, ref, settings, plan)
+    latest = repo.save_soil_sample(conn, SoilSample(enterprise_id=e.id, sample_date="2026-06-01", p_al=9),
+                                   [f1.id, f2.id])
+    assert ps.sample_plan_updates(conn, settings, latest.id) == []  # finished plans are never changed

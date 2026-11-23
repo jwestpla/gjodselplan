@@ -1,2 +1,3 @@
 pytest>=7.0
 reportlab>=4.0  # PDF export, from phase 5
+pypdf>=5.0  # appends foreign lab reports to the plan PDF

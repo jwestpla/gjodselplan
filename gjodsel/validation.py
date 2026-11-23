@@ -11,7 +11,7 @@ from datetime import date
 from typing import Iterable
 
 from .models import (
-    APPLICATION_KINDS, COVER_TYPES, IRRIGATION_TYPES, SOIL_METHODS, TENURES, Application, Enterprise, Field,
+    APPLICATION_KINDS, COVER_TYPES, IRRIGATION_TYPES, SOIL_METHODS, SOIL_ORIGINS, TENURES, Application, Enterprise, Field,
     FieldSeason, Property, SoilSample,
 )
 
@@ -198,6 +198,7 @@ def clean_soil_sample(s: SoilSample) -> SoilSample:
         soil_type=clean_text(s.soil_type),
         clay_class=clean_text(s.clay_class),
         method=(s.method or "").strip(),
+        origin=(s.origin or "").strip(),
         notes=clean_text(s.notes),
     )
 
@@ -213,6 +214,10 @@ def soil_sample_errors(s: SoilSample, today: date | None = None) -> list[str]:
             errors.append("Prøvedato kan ikke være fram i tid.")
     if s.method not in SOIL_METHODS:
         errors.append("Metode må være «AL» eller «annet».")
+    if s.origin not in SOIL_ORIGINS:
+        errors.append("Laboratoriet må være norsk eller utenlandsk.")
+    elif s.origin == "utenlandsk" and not (s.attachment or "").lower().endswith(".pdf"):
+        errors.append("Utenlandske jordprøver må ha analyserapporten vedlagt som PDF.")
     for value, label in ((s.depth_from_cm, "Dybde fra"), (s.depth_to_cm, "Dybde til")):
         if value is not None and value < 0:
             errors.append(f"{label} kan ikke være negativ.")

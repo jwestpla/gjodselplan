@@ -137,3 +137,17 @@ def test_open_database_backs_up_before_migrating(tmp_path):
     assert not list(backups.glob("*.db"))  # first start: nothing to back up
     db.open_database(db_file, backups, keep=20).close()
     assert len(list(backups.glob("*.db"))) == 1
+
+
+def test_migration_2_adds_soil_origin_to_existing_db(tmp_path):
+    db_file = tmp_path / "v011.db"
+    c = db.connect(db_file)
+    db.schema_version(c)  # creates the bookkeeping table
+    c.executescript(f"BEGIN; {db.MIGRATIONS[0]} INSERT INTO schema_version VALUES (1, 'x'); COMMIT;")  # a v0.1.1 DB
+    eid = _enterprise(c)
+    c.execute("INSERT INTO soil_sample (enterprise_id, sample_date) VALUES (?, '2025-04-01')", (eid,))
+    assert db.migrate(c) == 2
+    assert c.execute("SELECT origin FROM soil_sample").fetchone()[0] == "norsk"
+    with pytest.raises(sqlite3.IntegrityError):
+        c.execute("UPDATE soil_sample SET origin = 'svensk'")
+    c.close()

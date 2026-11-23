@@ -99,6 +99,8 @@ class SampleLine:
     valid: bool
     validity_text: str
     field_nos: list[str]
+    origin: str = "norsk"  # defaults keep snapshots from before v0.1.2 readable
+    attachment: str | None = None
 
 
 @dataclass

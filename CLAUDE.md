@@ -8,6 +8,7 @@
   tools/merge_review.py, docs/index.html (GitHub Pages). Tested on Windows by the user.
 - Sharing: public repo jwestpla/gjodselplan; pushing a v* tag publishes a Release with Gjodselplan-windows.zip. `.github/workflows/windows-build.yml` does the Windows clean-PATH test.
 - The schema is frozen since Phase 1: ask before changing it, and write a migration.
+  Migration 2 (v0.1.2, approved by the user): soil_sample.origin 'norsk' | 'utenlandsk'.
 - Not started (PLAN §10 "Later", ask first): map view, lab report import, liming, fertigation split, Ldir export.
 
 ## Environment
@@ -52,6 +53,10 @@
   review_status has one row per (file, row_key); row keys are codes/stages/bands (`reference_review.row_key`).
   Band edits rename the key; save_session moves the review entry. Edited rows get status "Endret" automatically.
 - "X av Y vurdert": Y = rows with ANTATT/SJEKK ETIKETT source or with any review entry.
+- Foreign soil samples (origin 'utenlandsk') must have a PDF attachment; pdf_export appends those PDFs (pypdf,
+  approved dependency) for samples linked to fields in the plan. Origin is separate from method (AL/annet).
+- One soil sample → many fields via field_soil_sample links (no duplicating results). After linking, the soil tab
+  offers to switch draft-plan seasons that have no valid / an older sample (`plan_service.sample_plan_updates`).
 - Coordinates: Google Maps in the browser + paste (`geo.parse_coordinates`, `ui/coordinates.py`), no API key, no
   embedded map. Short links (maps.app.goo.gl) can't be read offline.
 - Gjødslingsplan tab (v0.1.1) is laid out for a 1366×768 laptop at 125 % (Tk sees ~1093×614): context-dependent

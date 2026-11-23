@@ -154,3 +154,32 @@ def test_load_settings(conn):
         repo.load_settings(conn)
     text = "\n".join(exc.value.errors)
     assert "heltall" in text and "p_skew_factor" in text and "apply_mold_correction" in text
+
+
+def test_set_sample_fields_links_one_sample_to_several_fields(conn, farm):
+    e, p, f1 = farm
+    f2 = repo.save_field(conn, Field(property_id=p.id, field_no="2", name="Plommer", area_daa=4,
+                                     culture_code="plomme"))
+    s = repo.save_soil_sample(conn, SoilSample(enterprise_id=e.id, sample_date="2025-04-01", ph=6.2), [f1.id])
+    repo.set_sample_fields(conn, s.id, [f1.id, f2.id, f2.id])
+    assert repo.sample_field_links(conn, e.id) == {s.id: [f1.id, f2.id]}
+    assert repo.get_soil_sample(conn, s.id).ph == 6.2  # values untouched
+    other = repo.save_enterprise(conn, Enterprise(name="Nabogård"))
+    op = repo.save_property(conn, Property(enterprise_id=other.id, kommunenr="4642", gnr=1, bnr=1))
+    foreign = repo.save_field(conn, Field(property_id=op.id, field_no="9", name="X", area_daa=1, culture_code="eple"))
+    with pytest.raises(ValidationError, match="samme foretak"):
+        repo.set_sample_fields(conn, s.id, [f1.id, foreign.id])
+    assert repo.sample_field_links(conn, e.id) == {s.id: [f1.id, f2.id]}  # unchanged
+
+
+def test_foreign_sample_needs_pdf_report(conn, farm):
+    e, _, f = farm
+    foreign = SoilSample(enterprise_id=e.id, sample_date="2025-04-01", origin="utenlandsk", method="annet")
+    with pytest.raises(ValidationError, match="PDF"):
+        repo.save_soil_sample(conn, foreign, [f.id])
+    with pytest.raises(ValidationError, match="PDF"):
+        repo.save_soil_sample(conn, SoilSample(**{**foreign.__dict__, "attachment": "attachments/1/rapport.png"}))
+    saved = repo.save_soil_sample(conn, SoilSample(**{**foreign.__dict__, "attachment": "attachments/1/Rapport.PDF"}))
+    assert saved.origin == "utenlandsk"
+    with pytest.raises(ValidationError, match="norsk eller utenlandsk"):
+        repo.save_soil_sample(conn, SoilSample(enterprise_id=e.id, sample_date="2025-04-01", origin="svensk"))

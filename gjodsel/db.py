@@ -167,8 +167,15 @@ INSERT INTO setting (key, value) VALUES
   ('soil_max_age_years', '8');
 """
 
+# 2: where the sample was analysed. Foreign samples carry the lab's own report (PDF), which is
+#    appended to the plan PDF. Separate from `method`: a foreign lab can still use the AL method.
+_V2_SOIL_ORIGIN = """
+ALTER TABLE soil_sample ADD COLUMN origin TEXT NOT NULL DEFAULT 'norsk'
+  CHECK (origin IN ('norsk', 'utenlandsk'));
+"""
+
 # Append only. Never edit a migration that has shipped; add a new one.
-MIGRATIONS: list[str] = [_SCHEMA_V1]
+MIGRATIONS: list[str] = [_SCHEMA_V1, _V2_SOIL_ORIGIN]
 
 
 def now_iso() -> str:

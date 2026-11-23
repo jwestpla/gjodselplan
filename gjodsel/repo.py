@@ -315,19 +315,33 @@ def save_soil_sample(conn: sqlite3.Connection, s: SoilSample,
         else:
             _update(conn, "soil_sample", s)
         if field_ids is not None:
-            field_ids = sorted(set(field_ids))
-            own = {r[0] for r in conn.execute(
-                "SELECT f.id FROM field f JOIN property p ON p.id = f.property_id WHERE p.enterprise_id = ?",
-                (s.enterprise_id,),
-            )}
-            if not set(field_ids) <= own:
-                raise ValidationError("Jordprøven kan bare knyttes til skifter på samme foretak.")
-            conn.execute("DELETE FROM field_soil_sample WHERE soil_sample_id = ?", (s.id,))
-            conn.executemany(
-                "INSERT INTO field_soil_sample (field_id, soil_sample_id) VALUES (?, ?)",
-                [(fid, s.id) for fid in field_ids],
-            )
+            _replace_sample_links(conn, s, field_ids)
     return get_soil_sample(conn, s.id)
+
+
+def set_sample_fields(conn: sqlite3.Connection, sample_id: int, field_ids: Iterable[int]) -> None:
+    """Replace the fields one soil sample covers (one analysis can apply to several fields)."""
+    with transaction(conn):
+        s = get_soil_sample(conn, sample_id)
+        if s is None:
+            raise ValidationError("Jordprøven finnes ikke.")
+        _replace_sample_links(conn, s, field_ids)
+
+
+def _replace_sample_links(conn: sqlite3.Connection, s: SoilSample, field_ids: Iterable[int]) -> None:
+    """Call inside a transaction."""
+    field_ids = sorted(set(field_ids))
+    own = {r[0] for r in conn.execute(
+        "SELECT f.id FROM field f JOIN property p ON p.id = f.property_id WHERE p.enterprise_id = ?",
+        (s.enterprise_id,),
+    )}
+    if not set(field_ids) <= own:
+        raise ValidationError("Jordprøven kan bare knyttes til skifter på samme foretak.")
+    conn.execute("DELETE FROM field_soil_sample WHERE soil_sample_id = ?", (s.id,))
+    conn.executemany(
+        "INSERT INTO field_soil_sample (field_id, soil_sample_id) VALUES (?, ?)",
+        [(fid, s.id) for fid in field_ids],
+    )
 
 
 def sample_field_links(conn: sqlite3.Connection, enterprise_id: int) -> dict[int, list[int]]:

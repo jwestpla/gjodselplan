@@ -7,9 +7,13 @@ cannot encode (subscripts, Unicode minus, ≥, …) are mapped to plain text.
 
 from __future__ import annotations
 
+import os
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from xml.sax.saxutils import escape
+
+from pypdf import PdfReader, PdfWriter
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_RIGHT
@@ -30,7 +34,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 
-from .plan_view import FieldRow, PlanView
+from .plan_view import FieldRow, PlanView, SampleLine
 from .units import format_date, format_number, format_plain
 
 PAGE_W, PAGE_H = A4
@@ -173,11 +177,54 @@ def export_plan(view: PlanView, path: Path, data_dir: Path) -> Path:
     story += [PageBreak(), P("Plan per skifte", H1)]
     for row in view.rows:
         story += _field_block(view, row)
-    story += [PageBreak()] + _soil_overview(view)
+    reports = foreign_reports(view, data_dir)
+    story += [PageBreak()] + _soil_overview(view, reports)
     story += [Spacer(1, 6 * mm), CondPageBreak(80 * mm)] + _purchase_list(view)
     story += [PageBreak()] + _journal_form(view)
     _build(path, story, _footer(view, "Gjødslingsplan"), f"Gjødslingsplan {view.year}")
+    _append_pdfs(path, [r.path for r in reports if r.pages])
     return path
+
+
+@dataclass(frozen=True)
+class ForeignReport:
+    sample: SampleLine
+    path: Path | None
+    pages: int  # 0 = can't be attached, see problem
+    problem: str = ""
+
+
+def foreign_reports(view: PlanView, data_dir: Path) -> list[ForeignReport]:
+    """Lab reports (PDF) of foreign soil samples used by fields in the plan, checked before the plan is drawn."""
+    out = []
+    for s in view.samples:
+        if s.origin != "utenlandsk" or not s.field_nos:
+            continue
+        path = data_dir / s.attachment if s.attachment else None
+        if path is None or not path.exists():
+            out.append(ForeignReport(s, path, 0, "rapportfilen mangler"))
+            continue
+        try:
+            reader = PdfReader(str(path))
+            if reader.is_encrypted and not reader.decrypt(""):
+                raise ValueError("PDF-en er passordbeskyttet")
+            out.append(ForeignReport(s, path, len(reader.pages)))
+        except Exception as exc:  # a broken file must not stop the export; it is reported in the PDF
+            out.append(ForeignReport(s, path, 0, f"kunne ikke leses ({exc})"))
+    return out
+
+
+def _append_pdfs(path: Path, extra: list[Path]) -> None:
+    if not extra:
+        return
+    writer = PdfWriter()
+    writer.append(str(path))
+    for f in extra:
+        writer.append(str(f))
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "wb") as fh:
+        writer.write(fh)
+    os.replace(tmp, path)
 
 
 def _front_page(view: PlanView) -> list:
@@ -305,7 +352,7 @@ def _field_block(view: PlanView, r: FieldRow) -> list:
     return [KeepTogether(block[:4]), *block[4:], Spacer(1, 3 * mm)]
 
 
-def _soil_overview(view: PlanView) -> list:
+def _soil_overview(view: PlanView, reports: list[ForeignReport]) -> list:
     out = [P("Jordanalyser", H1),
            P(f"Gyldighet vurdert for {view.year}. Bare AL-analyser brukes i beregningen. "
              "P-AL er oppgitt som mg P/100 g.", SMALL), Spacer(1, 2 * mm)]
@@ -317,7 +364,8 @@ def _soil_overview(view: PlanView) -> list:
                                       else "" for k in keys), "", "", ""])
     invalid_rows = []
     for s in view.samples:
-        rows.append([format_date(s.sample_date), " / ".join(filter(None, (s.label, s.lab))), s.method,
+        lab = " / ".join(filter(None, (s.label, s.lab))) + (" (utenlandsk lab)" if s.origin == "utenlandsk" else "")
+        rows.append([format_date(s.sample_date), lab, s.method,
                      *(_num(s.values.get(k), 1, "") for k in keys), f"{s.age} år",
                      s.validity_text if s.valid else f"UGYLDIG: {s.validity_text}", ", ".join(s.field_nos)])
         if not s.valid:
@@ -331,6 +379,15 @@ def _soil_overview(view: PlanView) -> list:
         out.append(P("Ingen jordprøver registrert.", WARN))
     if any(s.lat is None for s in view.samples):
         out.append(P("Merk: § 29 krever koordinater for prøvepunktene; noen prøver mangler koordinater.", WARN))
+    if reports:
+        out += [Spacer(1, 3 * mm), P("Analyserapporter fra utenlandske laboratorier", H3)]
+        for r in reports:
+            name = f"{format_date(r.sample.sample_date)} {r.sample.label or ''}".strip()
+            if r.pages:
+                out.append(P(f"• {name} ({r.sample.lab or 'ukjent lab'}): lagt ved bakerst i planen, "
+                             f"{r.pages} side(r) – {r.path.name}", BODY))
+            else:
+                out.append(P(f"• {name}: rapporten kunne ikke legges ved – {r.problem}.", WARN))
     return out
 
 

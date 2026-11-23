@@ -8,6 +8,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import TYPE_CHECKING
 
+from .. import plan_service as ps
 from .. import repo
 from ..attachments import open_path, resolve, store_attachment
 from ..models import SOIL_METHODS, SoilSample
@@ -15,7 +16,9 @@ from ..soil import P_AL_UNIT_P, P_AL_UNIT_P2O5, P_AL_UNITS, SOIL_PARAMETERS, cla
 from ..units import format_date, format_plain, parse_date, round_half_up
 from ..validation import ValidationError
 from .coordinates import add_coordinate_picker, address_query
-from .widgets import AMBER, BLUE, GREEN, GREY, RED, EditDialog, button_row, scrolled_tree, selected_id, show_errors
+from .widgets import (
+    AMBER, BLUE, GREEN, GREY, RED, Checklist, EditDialog, button_row, scrolled_tree, selected_id, show_errors,
+)
 
 if TYPE_CHECKING:
     from .main_window import MainWindow
@@ -49,6 +52,7 @@ class SoilTab(ttk.Frame):
         button_row(self, [
             ("Ny jordprøve", self.new),
             ("Rediger", self.edit),
+            ("Velg skifter…", self.choose_fields),
             ("Slett", self.delete),
             ("Legg ved rapport…", self.attach_report),
             ("Åpne rapport", self.open_report),
@@ -92,7 +96,8 @@ class SoilTab(ttk.Frame):
                     text = format_plain(round_half_up(value, 1)) if value is not None else ""
                     values.append(text + _MARKERS[classify(value, optimum.get(key))])
                 self.tree.insert("", "end", iid=str(s.id), tags=(tag,) if tag else (), values=(
-                    format_date(s.sample_date), s.label or "", s.lab or "", s.method, *values,
+                    format_date(s.sample_date), s.label or "", s.lab or "",
+                    s.method + (" · utl." if s.origin == "utenlandsk" else ""), *values,
                     ", ".join(field_nos) or "ingen", "ok" if s.lat is not None else "mangler",
                     status, "ja" if s.attachment else "",
                 ))
@@ -160,8 +165,36 @@ class SoilTab(ttk.Frame):
             self._edit(s)
 
     def _edit(self, s: SoilSample) -> None:
-        if SoilSampleDialog(self, self.app, s).show():
+        dialog = SoilSampleDialog(self, self.app, s)
+        if dialog.show():
             self.app.data_changed()
+            self._offer_plan_update(dialog.saved_id)
+
+    def choose_fields(self) -> None:
+        """Use one sample (one lab analysis) for several fields."""
+        s = self._selected_sample()
+        if s and SampleFieldsDialog(self, self.app, s).show():
+            self.app.data_changed()
+            self._offer_plan_update(s.id)
+
+    def _offer_plan_update(self, sample_id: int | None) -> None:
+        """Draft plans keep the sample chosen when they were made; offer to switch the linked fields to this one."""
+        settings = self.app.settings()
+        if sample_id is None or settings is None or self.app.ref is None:
+            return
+        updates = ps.sample_plan_updates(self.app.conn, settings, sample_id)
+        if not updates:
+            return
+        names = "\n".join(f"• Plan {plan.year}: skifte {f.field_no} {f.name}" for plan, _season, f in updates)
+        if messagebox.askyesno(
+            "Bruk prøven i planen",
+            f"Skal jordprøven brukes i utkastet til gjødslingsplan for disse skiftene?\n\n{names}\n\n"
+            "De har i dag ingen gyldig jordprøve eller en eldre prøve. Behovet beregnes på nytt.",
+            parent=self,
+        ):
+            ps.use_sample_in_drafts(self.app.conn, self.app.ref, settings, sample_id, updates)
+            self.app.data_changed()
+            self.app.set_status(f"Jordprøven brukes nå for {len(updates)} skifte(r) i planen.")
 
     def delete(self) -> None:
         s = self._selected_sample()
@@ -187,6 +220,9 @@ class SoilTab(ttk.Frame):
             return
         filename = filedialog.askopenfilename(parent=self, title="Velg analyserapport", filetypes=REPORT_FILETYPES)
         if not filename:
+            return
+        if s.origin == "utenlandsk" and not filename.lower().endswith(".pdf"):
+            show_errors(self, ["Utenlandske jordprøver må ha rapporten som PDF (den legges ved planen)."], "Rapport")
             return
         relative = store_attachment(self.app.paths.data_dir, s.enterprise_id, Path(filename))
         repo.set_soil_sample_attachment(self.app.conn, s.id, relative)
@@ -216,11 +252,21 @@ class SoilSampleDialog(EditDialog):
         super().__init__(master, "Ny jordprøve" if sample.id is None else "Rediger jordprøve", columns=2)
         self.app = app
         self.sample = sample
+        self._report_source: Path | None = None  # PDF picked in this dialog, copied on save
         f = self.form
+        f.combo("origin", "Laboratorium *", [("norsk", "Norsk lab"), ("utenlandsk", "Utenlandsk lab")], width=16)
+        f.var("origin").trace_add("write", lambda *_: self._update_report_hint(origin_changed=True))
         f.entry("sample_date", "Prøvedato * (dd.mm.åååå)", width=12)
         f.entry("label", "Merking (som på rapporten)")
-        f.entry("lab", "Laboratorium")
+        f.entry("lab", "Navn på lab")
         f.entry("lab_report_no", "Rapportnr.")
+        report = ttk.Frame(f)
+        self.report_name = ttk.Label(report, text="", width=24)
+        self.report_name.pack(side="left")
+        ttk.Button(report, text="Velg PDF…", command=self._choose_report).pack(side="left", padx=(6, 0))
+        f.custom("report", "Analyserapport", report)
+        self.report_hint = ttk.Label(f, text="", wraplength=300, justify="left", foreground="#666666")
+        f.custom("report_hint", "", self.report_hint)
         f.combo("method", "Metode", [(m, m) for m in SOIL_METHODS], width=8)
         f.entry("depth_from_cm", "Dybde fra (cm)", width=8)
         f.entry("depth_to_cm", "Dybde til (cm)", width=8)
@@ -243,24 +289,40 @@ class SoilSampleDialog(EditDialog):
             f.set(key, getattr(sample, key))
         f.set("sample_date", format_date(sample.sample_date))
         f.set("p_al_unit", P_AL_UNIT_P)
+        self.report_name.configure(text=Path(sample.attachment).name if sample.attachment else "ingen valgt")
+        f.set("origin", sample.origin)
+        self._loaded = True
 
-        ttk.Label(self.extra, text="Skifter prøven gjelder for (velg ett eller flere):").pack(anchor="w")
-        linked = set()
-        if sample.id is not None:
-            linked = set(repo.sample_field_links(app.conn, sample.enterprise_id).get(sample.id, []))
-        self._fields = [fl for fl in repo.list_fields(app.conn, sample.enterprise_id)
-                        if fl.active or fl.id in linked]
-        self.field_list = tk.Listbox(self.extra, selectmode="multiple", height=6, exportselection=False)
-        self.field_list.pack(fill="x")
-        for index, fl in enumerate(self._fields):
-            self.field_list.insert("end", f"{fl.field_no} – {fl.name}" + ("" if fl.active else " (inaktiv)"))
-            if fl.id in linked:
-                self.field_list.selection_set(index)
+        self.saved_id: int | None = None
+        ttk.Label(self.extra, text="Skifter prøven gjelder for – én prøve kan brukes for flere skifter:").pack(anchor="w")
+        self._fields, self.field_list = _field_checklist(self.extra, app, sample)
+        self.field_list.pack(fill="x", pady=(2, 0))
+
+    def _update_report_hint(self, origin_changed: bool = False) -> None:
+        foreign = self.form.get("origin") == "utenlandsk"
+        self.report_hint.configure(
+            text="Påkrevd for utenlandsk lab: PDF-en legges ved bakerst i gjødslingsplanen. Verdiene brukes bare i "
+                 "beregningen hvis metoden er AL." if foreign else "Valgfritt for norsk lab (legges ikke ved planen).",
+            foreground=AMBER if foreign and not (self._report_source or self.sample.attachment) else "#666666")
+        if origin_changed and foreign and getattr(self, "_loaded", False) and self.form.get("method") == "AL":
+            self.form.set("method", "annet")  # foreign labs rarely use the Norwegian AL method; change back if they do
+
+    def _choose_report(self) -> None:
+        name = filedialog.askopenfilename(parent=self, title="Velg analyserapport (PDF)",
+                                          filetypes=[("PDF", "*.pdf"), ("Alle filer", "*.*")])
+        if not name:
+            return
+        if not name.lower().endswith(".pdf"):
+            show_errors(self, ["Analyserapporten må være en PDF-fil."], "Analyserapport")
+            return
+        self._report_source = Path(name)
+        self.report_name.configure(text=self._report_source.name)
+        self._update_report_hint()
 
     def _map_fallback(self):
         """Open Google Maps at a field the sample covers (ticked first), else the farm address."""
-        ticked = [self._fields[i] for i in self.field_list.curselection()]
-        for fl in ticked + self._fields:
+        ticked = set(self.field_list.selected())
+        for fl in [fl for fl in self._fields if fl.id in ticked] + self._fields:
             if fl.lat is not None and fl.lon is not None:
                 return fl.lat, fl.lon
         return address_query(repo.get_enterprise(self.app.conn, self.sample.enterprise_id))
@@ -288,9 +350,13 @@ class SoilSampleDialog(EditDialog):
             notes = f"{notes}\n{line}".strip()
 
         values.update({key: f.get(key) for key in self._TEXT_KEYS})
-        values.update(notes=notes, sample_date=sampled.isoformat() if sampled else "", p_al=p_al)
+        values.update(notes=notes, sample_date=sampled.isoformat() if sampled else "", p_al=p_al,
+                      origin=f.get("origin"))
+        if values["origin"] == "utenlandsk" and not (self._report_source or
+                                                     (self.sample.attachment or "").lower().endswith(".pdf")):
+            raise ValidationError("Velg analyserapporten (PDF) for en utenlandsk jordprøve.")
         sample = replace(self.sample, **values)
-        field_ids = [self._fields[i].id for i in self.field_list.curselection()]
+        field_ids = self.field_list.selected()
         if not field_ids and not messagebox.askyesno(
             "Ingen skifter", "Prøven er ikke knyttet til noe skifte og blir ikke brukt i planer.\n\nLagre likevel?",
             parent=self,
@@ -301,5 +367,45 @@ class SoilSampleDialog(EditDialog):
             parent=self,
         ):
             return False
-        repo.save_soil_sample(self.app.conn, sample, field_ids)
+        if self._report_source is not None:
+            sample = replace(sample, attachment=store_attachment(
+                self.app.paths.data_dir, sample.enterprise_id, self._report_source))
+        self.saved_id = repo.save_soil_sample(self.app.conn, sample, field_ids).id
         return None
+
+
+class SampleFieldsDialog(EditDialog):
+    """Pick the fields one soil sample covers, without opening the full sample form."""
+
+    def __init__(self, master, app: MainWindow, sample: SoilSample):
+        super().__init__(master, "Skifter for jordprøven")
+        self.app = app
+        self.sample = sample
+        name = f"{format_date(sample.sample_date)} {sample.label or ''}".strip()
+        ttk.Label(self.form, text=f"Jordprøve {name}", font=("TkDefaultFont", 0, "bold")).pack(anchor="w")
+        ttk.Label(self.form, text="Prøveresultatet brukes for alle skiftene du krysser av.",
+                  foreground="#666666").pack(anchor="w", pady=(0, 6))
+        self._fields, self.field_list = _field_checklist(self.form, app, sample)
+        self.field_list.pack(fill="x")
+
+    def save(self) -> bool | None:
+        field_ids = self.field_list.selected()
+        if not field_ids and not messagebox.askyesno(
+            "Ingen skifter", "Prøven blir ikke knyttet til noe skifte og blir ikke brukt i planer.\n\nLagre likevel?",
+            parent=self,
+        ):
+            return False
+        repo.set_sample_fields(self.app.conn, self.sample.id, field_ids)
+        return None
+
+
+def _field_checklist(master, app: MainWindow, sample: SoilSample):
+    """Active fields (plus inactive ones already linked) as check boxes, the linked ones ticked."""
+    linked = set()
+    if sample.id is not None:
+        linked = set(repo.sample_field_links(app.conn, sample.enterprise_id).get(sample.id, []))
+    fields = [fl for fl in repo.list_fields(app.conn, sample.enterprise_id) if fl.active or fl.id in linked]
+    cultures = {c.code: c.name_nb for c in app.ref.cultures.values()} if app.ref else {}
+    items = [(fl.id, f"{fl.field_no} – {fl.name} ({cultures.get(fl.culture_code, fl.culture_code)}, "
+                     f"{format_plain(fl.area_daa)} daa)" + ("" if fl.active else " – inaktiv")) for fl in fields]
+    return fields, Checklist(master, items, linked)

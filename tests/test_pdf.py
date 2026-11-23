@@ -32,3 +32,44 @@ def test_export_plan_and_journal(conn, farm, fixed_ref, settings, tmp_path):
         assert path.read_bytes().startswith(b"%PDF")
         assert path.stat().st_size > 1500
     assert default_filename(view, "Gjodslingsplan") == "Gjodslingsplan_Testgård_2026_v1.pdf"
+
+
+def test_foreign_lab_report_is_appended(conn, farm, fixed_ref, settings, tmp_path):
+    import json
+
+    from pypdf import PdfReader
+    from reportlab.pdfgen.canvas import Canvas
+
+    from gjodsel.attachments import store_attachment
+    from gjodsel.plan_view import PlanView
+
+    e, p, f = farm
+    lab_pdf = tmp_path / "Fertilab rapport.pdf"
+    canvas = Canvas(str(lab_pdf))
+    for page in range(2):
+        canvas.drawString(100, 700, f"Fertilab side {page + 1}")
+        canvas.showPage()
+    canvas.save()
+    attachment = store_attachment(tmp_path, e.id, lab_pdf)
+    repo.save_soil_sample(conn, SoilSample(enterprise_id=e.id, sample_date="2025-04-01", origin="utenlandsk",
+                                           method="annet", lab="Fertilab", attachment=attachment), [f.id])
+    repo.save_soil_sample(conn, SoilSample(enterprise_id=e.id, sample_date="2024-04-01", origin="utenlandsk",
+                                           method="annet", label="Borte", attachment="attachments/1/borte.pdf"), [f.id])
+    plan = ps.create_plan(conn, fixed_ref, settings, e.id, 2026)
+    view = ps.build_view(conn, fixed_ref, settings, plan)
+
+    without = export_plan(view, tmp_path / "uten.pdf", tmp_path / "other_data_dir")  # no reports there
+    with_reports = export_plan(view, tmp_path / "med.pdf", tmp_path)
+    pages_without = len(PdfReader(str(without)).pages)
+    reader = PdfReader(str(with_reports))
+    assert len(reader.pages) == pages_without + 2
+    assert "Fertilab side 2" in reader.pages[-1].extract_text()
+    text = "".join(page.extract_text() for page in reader.pages)
+    assert "lagt ved bakerst i planen, 2 side(r)" in text
+    assert "Borte: rapporten kunne ikke legges ved – rapportfilen mangler" in text
+
+    # Snapshots written before origin existed still load
+    data = json.loads(view.to_json())
+    for sample in data["samples"]:
+        del sample["origin"], sample["attachment"]
+    assert PlanView.from_json(json.dumps(data)).samples[0].origin == "norsk"

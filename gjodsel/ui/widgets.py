@@ -257,3 +257,45 @@ class EditDialog(tk.Toplevel):
 
     def save(self) -> bool | None:
         raise NotImplementedError
+
+
+class Checklist(ttk.Frame):
+    """Check boxes for picking several items (ids), with «Velg alle» / «Velg ingen».
+
+    Scrolls when there are more items than fit in `max_height` pixels.
+    """
+
+    def __init__(self, master: tk.Misc, items: Sequence[tuple[int, str]], selected: Iterable[int] = (),
+                 max_height: int = 150):
+        super().__init__(master)
+        selected = set(selected)
+        self.vars: dict[int, tk.BooleanVar] = {}
+        background = ttk.Style(self).lookup("TFrame", "background") or None
+        canvas = tk.Canvas(self, highlightthickness=0, borderwidth=0, background=background)
+        inner = ttk.Frame(canvas)
+        for row, (item_id, text) in enumerate(items):
+            var = self.vars[item_id] = tk.BooleanVar(value=item_id in selected)
+            ttk.Checkbutton(inner, text=text, variable=var).grid(row=row, column=0, sticky="w", pady=1)
+        canvas.create_window(0, 0, window=inner, anchor="nw")
+        inner.update_idletasks()
+        height = min(inner.winfo_reqheight(), max_height)
+        canvas.configure(width=inner.winfo_reqwidth(), height=max(height, 1),
+                         scrollregion=(0, 0, inner.winfo_reqwidth(), inner.winfo_reqheight()))
+        canvas.grid(row=0, column=0, sticky="nsew")
+        if inner.winfo_reqheight() > max_height:
+            ys = ttk.Scrollbar(self, orient="vertical", command=canvas.yview)
+            canvas.configure(yscrollcommand=ys.set)
+            ys.grid(row=0, column=1, sticky="ns")
+        if not items:
+            ttk.Label(self, text="Ingen skifter registrert.").grid(row=0, column=0, sticky="w")
+        buttons = ttk.Frame(self)
+        buttons.grid(row=1, column=0, sticky="w", pady=(4, 0))
+        ttk.Button(buttons, text="Velg alle", command=lambda: self.set_all(True)).pack(side="left")
+        ttk.Button(buttons, text="Velg ingen", command=lambda: self.set_all(False)).pack(side="left", padx=(6, 0))
+
+    def selected(self) -> list[int]:
+        return [item_id for item_id, var in self.vars.items() if var.get()]
+
+    def set_all(self, value: bool) -> None:
+        for var in self.vars.values():
+            var.set(value)

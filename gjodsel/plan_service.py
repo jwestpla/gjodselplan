@@ -384,6 +384,7 @@ def _build_live(conn: sqlite3.Connection, ref: RefTables, settings: Settings, pl
             lat=s.lat, lon=s.lon, age=v.age, valid=v.valid,
             validity_text=("utløper snart" if v.expires_soon else "gyldig") if v.valid else v.reason,
             field_nos=[field_map[fid].field_no for fid in links.get(s.id, []) if fid in field_map],
+            origin=s.origin, attachment=s.attachment,
         ))
 
     advisor = {k: v for k, v in repo.get_settings(conn).items() if k.startswith("advisor_")}
@@ -440,3 +441,39 @@ def recalculate_drafts(conn: sqlite3.Connection, ref: RefTables, settings: Setti
                          for n, old, new in zip("NPK", before.get(s.id, (None,) * 3), after) if old != new]
                 lines.append(f"{enterprise.name} {plan.year} · skifte {f.field_no} {f.name}: {', '.join(parts)}")
     return lines
+
+
+def sample_plan_updates(conn: sqlite3.Connection, settings: Settings,
+                        sample_id: int) -> list[tuple[Plan, FieldSeason, Field]]:
+    """Draft-plan fields that should switch to this soil sample after it was linked to them.
+
+    A field qualifies when the sample is linked to it, valid for the plan year, and the field
+    today has no valid sample or an older one. Finished plans are never touched.
+    """
+    sample = repo.get_soil_sample(conn, sample_id)
+    if sample is None:
+        return []
+    linked = set(repo.sample_field_links(conn, sample.enterprise_id).get(sample_id, []))
+    fields = {f.id: f for f in repo.list_fields(conn, sample.enterprise_id)}
+    samples = {s.id: s for s in repo.list_soil_samples(conn, sample.enterprise_id)}
+    max_age = settings.soil_max_age_years
+    updates = []
+    for plan in repo.list_plans(conn, sample.enterprise_id):
+        if plan.finished or not sample_validity(sample.method, sample.year, plan.year, max_age).valid:
+            continue
+        for season in repo.list_field_seasons(conn, plan.id):
+            if season.field_id not in linked or season.soil_sample_id == sample_id:
+                continue
+            current = samples.get(season.soil_sample_id)
+            if (current is not None and sample_validity(current.method, current.year, plan.year, max_age).valid
+                    and current.sample_date >= sample.sample_date):
+                continue
+            updates.append((plan, season, fields[season.field_id]))
+    return updates
+
+
+def use_sample_in_drafts(conn: sqlite3.Connection, ref: RefTables, settings: Settings, sample_id: int,
+                         updates: list[tuple[Plan, FieldSeason, Field]]) -> None:
+    """Point the given draft field seasons at the sample and recalculate them."""
+    for _plan, season, _field in updates:
+        save_season(conn, ref, settings, replace(season, soil_sample_id=sample_id))

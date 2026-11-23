@@ -104,6 +104,7 @@ class Settings:
 
 
 SOIL_METHODS = ("AL", "annet")
+SOIL_ORIGINS = ("norsk", "utenlandsk")
 
 
 @dataclass
@@ -127,6 +128,7 @@ class SoilSample:
     soil_type: str | None = None
     clay_class: str | None = None
     method: str = "AL"
+    origin: str = "norsk"  # 'utenlandsk' samples carry the lab's report as a PDF attachment
     attachment: str | None = None
     notes: str | None = None
     id: int | None = None
