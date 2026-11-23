@@ -8,6 +8,7 @@ cannot encode (subscripts, Unicode minus, ≥, …) are mapped to plain text.
 from __future__ import annotations
 
 import hashlib
+import re
 import os
 from dataclasses import dataclass
 from datetime import date
@@ -37,6 +38,7 @@ from reportlab.platypus import (
 
 from . import farm_map, map_service
 from .geo import format_coordinates
+from .plan_service import UNVERIFIED_WARNING
 from .plan_view import FieldRow, PlanView, SampleLine
 from .units import format_date, format_number, format_plain
 
@@ -181,11 +183,41 @@ def _build(path: Path, story: list, footer_lines: list[str], title: str, inserti
     doc.build(story, canvasmaker=_numbered_canvas(footer_lines, insertions, appended))
 
 
+# K is shown as numbers only in the PDF: no calculation text, no K-table notes, no K-table reference
+# (the K table is borrowed from other crops, NIBIO has none for fruit). The app itself still shows them.
+_K_REFERENCE_NOTES = ("K-HNO", "k_correction.csv", "K-korreksjon")
+
+
+def _unverified_without_k(text: str) -> str:
+    return "; ".join(part for part in (text or "").split("; ") if part and not part.startswith("k_correction.csv"))
+
+
+def _rationale_without_k(text: str) -> str:
+    return re.sub(r"(^|(?<=\. ))K: .*$", "", text or "").strip()
+
+
+def _without_k_notes(notes) -> list[str]:
+    return [n for n in notes if not any(k in n for k in _K_REFERENCE_NOTES)]
+
+
+def _plan_warnings(view: PlanView) -> list[str]:
+    out = []
+    for w in view.warnings:
+        if w.startswith(UNVERIFIED_WARNING):
+            rest = _unverified_without_k(view.unverified)
+            if rest:
+                out.append(f"{UNVERIFIED_WARNING}: {rest}.")
+        elif not any(k in w for k in _K_REFERENCE_NOTES):
+            out.append(w)
+    return out
+
+
 def _footer(view: PlanView, kind: str) -> list[str]:
     status = "ferdigstilt" if view.finished else "utkast"
     lines = [f"{kind} {view.year} · {view.enterprise.get('name', '')} · versjon {view.version} ({status})"]
-    if view.unverified:
-        lines.append(f"Planen bygger på ikke-verifiserte normverdier: {view.unverified}")
+    unverified = _unverified_without_k(view.unverified)
+    if unverified:
+        lines.append(f"{UNVERIFIED_WARNING}: {unverified}")
     return lines
 
 
@@ -198,7 +230,9 @@ def export_plan(view: PlanView, path: Path, data_dir: Path) -> Path:
     insertions: list = []  # (after own page, pdf path, pages) – filled while the PDF is drawn
     story += [PageBreak()] + _map_pages(view, data_dir, insertions)
     story += [PageBreak(), P("Plan per skifte", H1)]
-    for row in view.rows:
+    for index, row in enumerate(view.rows):
+        if index:
+            story.append(PageBreak())  # one page per field
         story += _field_block(view, row)
     reports = lab_reports(view, data_dir)
     # Own pages: Jordanalyser, Innkjøpsliste, and one journal-form page per field (printed for the shed).
@@ -319,8 +353,9 @@ def _front_page(view: PlanView) -> list:
     out.append(_table(rows, [10 * mm, 32 * mm, 24 * mm, 13 * mm, 18 * mm] + [13.5 * mm] * 6,
                       numeric_from=5, extra=[("ALIGN", (3, 1), (3, -1), "RIGHT")]))
 
-    if view.warnings:
-        out += [P("Varsler", H2)] + [P(f"• {w}", WARN) for w in view.warnings]
+    warnings = _plan_warnings(view)
+    if warnings:
+        out += [P("Varsler", H2)] + [P(f"• {w}", WARN) for w in warnings]
     return out
 
 
@@ -386,7 +421,7 @@ def _generated_map(data: dict, data_dir: Path) -> list:
            Spacer(1, 1.5 * mm),
            P("Rød linje: eiendomsgrense · gul sirkel: jordprøve · blå firkant: skifte. "
              f"{farm_map.BOUNDARY_NOTE} Kart hentet {format_date(fm.fetched_date())}.", SMALL),
-           P(farm_map.ATTRIBUTION.get(fm.background_kind, ""), SMALL)]
+           P(fm.credit(), SMALL)]
     for note in fm.notes:
         out.append(P(note, WARN))
     if outside:
@@ -525,7 +560,7 @@ def _field_block(view: PlanView, r: FieldRow) -> list:
     block.append(_table(req_rows, [50 * mm, 25 * mm, 25 * mm, 25 * mm], numeric_from=1))
     if r.override_reason:
         block.append(P(f"Begrunnelse for overstyring: {r.override_reason}", SMALL))
-    block += [Spacer(1, 1.5 * mm), P(f"Beregning: {r.rationale}", SMALL)]
+    block += [Spacer(1, 1.5 * mm), P(f"Beregning: {_rationale_without_k(r.rationale)}", SMALL)]
 
     rows = [["Tidspunkt", "Gjødseltype", "kg/daa", "N", "P", "K", "Totalt kg"]]
     for line in r.planned:
@@ -538,7 +573,7 @@ def _field_block(view: PlanView, r: FieldRow) -> list:
                  P(_num(r.planned_supply["p"], 2), CELL_R, bold=True), _num(r.planned_supply["k"], 2), ""])
     block += [Spacer(1, 1.5 * mm),
               _table(rows, [36 * mm, 58 * mm, 16 * mm, 15 * mm, 15 * mm, 15 * mm, 19 * mm], numeric_from=2)]
-    notes = [*r.soil_notes, *(w for w in r.warnings if not w.startswith("Bygger på ikke-verifiserte"))]
+    notes = [*r.soil_notes, *_without_k_notes(w for w in r.warnings if not w.startswith("Bygger på ikke-verifiserte"))]
     for note in notes:
         block.append(P(f"• {note}", SMALL))
     if r.notes:

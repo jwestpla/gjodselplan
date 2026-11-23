@@ -99,7 +99,8 @@ class FieldsTab(ttk.Frame):
         properties = {p.id: p for p in repo.list_properties(self.app.conn, eid)}
         for p in properties.values():
             generated = farm_map.load_cached(self.app.paths.data_dir, eid, p.id)
-            parts = ([f"eiendomskart {format_date(generated.fetched_date())}"] if generated else []) + (
+            label = "flyfotokart" if generated and generated.background_kind == farm_map.PHOTO else "eiendomskart"
+            parts = ([f"{label} {format_date(generated.fetched_date())}"] if generated else []) + (
                 [Path(p.map_attachment).name] if p.map_attachment else [])
             self.prop_tree.insert("", "end", iid=str(p.id), tags=() if parts else ("missing_map",), values=(
                 p.farm_name or "", p.kommunenr, p.gnr, p.bnr, p.fnr, p.snr, p.tenure,
@@ -205,8 +206,34 @@ class FieldsTab(ttk.Frame):
             return
         relative = store_attachment(self.app.paths.data_dir, p.enterprise_id, Path(filename))
         repo.set_property_map(self.app.conn, p.id, relative)
+        farm_map.remove_photo(self.app.paths.data_dir, p.enterprise_id, p.id)  # it belonged to the old file
         self.app.data_changed()
         self.app.set_status(f"Kart lagret som {relative}.")
+        if relative.lower().endswith(".pdf"):
+            self._offer_photo_map(repo.get_property(self.app.conn, p.id))
+
+    def _offer_photo_map(self, p: Property) -> None:
+        """A NIBIO gårdskart holds an aerial photo: check that it is the right property and offer the photo map."""
+        from .. import map_service
+        from ..gardskart import GardskartError, GardskartMismatch
+
+        try:
+            map_service.uploaded_gardskart(self.app.paths.data_dir, p)
+        except GardskartMismatch as exc:
+            messagebox.showwarning("Gårdskart", f"{exc}\n\nKartet er lagret, men sjekk at du valgte riktig fil.",
+                                   parent=self)
+            return
+        except GardskartError:
+            return  # another kind of PDF: fine as a kartskisse, just no aerial photo map
+        if messagebox.askyesno(
+            "Flyfotokart",
+            "Gårdskartet inneholder flyfoto. Lage et kart med flyfotoet, eiendomsgrensen og jordprøvepunktene nå?\n\n"
+            "Flyfotoet plasseres ved å sammenligne med eiendomsgrensen fra Kartverket (krever internett).",
+            parent=self,
+        ):
+            from .map_dialog import MapDialog
+
+            MapDialog(self, self.app, p, start_kind=farm_map.PHOTO, fetch_now=True)
 
     def open_map(self) -> None:
         p = self._selected_property()

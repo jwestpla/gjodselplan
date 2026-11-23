@@ -101,6 +101,41 @@ def ensure_dirs(paths: Paths) -> None:
         d.mkdir(parents=True, exist_ok=True)
 
 
+REFERENCE_UPDATED_NOTE = "Referansedata er oppdatert til ny versjon"
+
+
+def _sha256(path: Path) -> str:
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def update_reference_files(source: Path, target: Path) -> list[str]:
+    """Replace installed reference files that are unchanged copies of an earlier shipped version.
+
+    Files the advisor has edited (any other content) are left alone. The replaced file is kept in
+    `target/tidligere/`. Returns the names of updated files.
+    """
+    from datetime import datetime
+
+    from .reference_versions import SHIPPED
+
+    updated = []
+    for src in sorted(source.glob("*.csv")):
+        dst = target / src.name
+        if not dst.is_file():
+            continue
+        installed = _sha256(dst)
+        if installed == _sha256(src) or installed not in SHIPPED.get(src.name, ()):
+            continue
+        backup = target / "tidligere" / f"{dst.stem}_{datetime.now():%Y%m%d_%H%M%S}{dst.suffix}"
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(dst, backup)
+        shutil.copy2(src, dst)
+        updated.append(src.name)
+    return updated
+
+
 def prepare_data_dir(paths: Paths) -> list[str]:
     """Create folders and, when packaged, copy what the user needs on first start.
 
@@ -118,6 +153,10 @@ def prepare_data_dir(paths: Paths) -> list[str]:
                 copied.append(src.name)
         if copied:
             notes.append(f"Referansedata kopiert til {paths.reference_dir} ({len(copied)} filer).")
+        updated = update_reference_files(source, paths.reference_dir)
+        if updated:
+            notes.append(f"{REFERENCE_UPDATED_NOTE}: {', '.join(updated)}. Forrige versjon er lagret i "
+                         f"{paths.reference_dir / 'tidligere'}.")
 
     demo = bundled_demo_dir()
     if is_frozen() and not paths.db_file.exists() and (demo / "gjodselplan.db").exists():

@@ -156,7 +156,7 @@ def calculate_requirement(fi: FieldInput, soil: SoilInput | None, plan_year: int
 
     # 4. P
     p = culture.p_base
-    steps.append(Step("P", f"norm {format_number(p)}", 0.0, p, "start"))
+    steps.append(Step("P", f"årlig forbruk {format_number(p)}", 0.0, p, "start"))
     if valid_soil is None:
         steps.append(Step("P", "ingen jordkorreksjon (mangler gyldig jordprøve)", 0.0, p, "note"))
     elif valid_soil.p_al is None:

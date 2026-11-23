@@ -102,6 +102,10 @@ Review `git diff` and run the tests before committing.
    folder (`kart/`), so the plan PDF can be made again offline; the uploaded NIBIO gårdskart
    follows it in the PDF. No login or API key; only knr/gnr/bnr/fnr and a map area are sent.
    `Gjodselplan --karttest` checks that the services can be reached.
+   With a NIBIO gårdskart PDF uploaded (*Legg ved gårdskart…*), the map window also offers
+   *Flyfoto (fra gårdskart)*: the aerial photo in the PDF is placed on the map by matching
+   Kartverket's boundary with the pink property line in the gårdskart (scale from the page).
+   If the match is uncertain, drag the red boundary onto the photo and press *Lagre plassering*.
 3. **Jordprøver** – soil samples, linked to fields. P-AL can be entered as
    mg P₂O₅/100 g; it is stored as mg P/100 g. Samples need coordinates (§ 29).
    Choose *Standardpakke 1* or *Utvidet analyse*. An extended analysis needs the lab's report as

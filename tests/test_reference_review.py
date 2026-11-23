@@ -74,14 +74,14 @@ def test_save_change_logs_and_marks_endret(ref_dir, files):
     changes = save_session(ref_dir, session, "Kari", changes_path, status_path)
     assert {(c.row_key, c.column, c.old, c.new) for c in changes} == {
         ("paere", "n_base", "6,5", "6,0"),
-        ("paere", "source", "NIBIO GH tab.7; yield_basis/n_per_tonne ANTATT", "NIBIO GH tab.7 – verifisert"),
+        ("paere", "source", "NIBIO GH tab.7; yield_basis/n_per_tonne ANTATT, P: årlig forbruk 2 kg/daa (rådgiver)", "NIBIO GH tab.7 – verifisert"),
     }
     assert load_reference(ref_dir).cultures["paere"].n_base == 6.0
     log = read_changes(changes_path)
     assert len(log) == 2 and log[0]["reviewer"] == "Kari"
     assert load_review_status(status_path)[("cultures.csv", "paere")].status == "Endret"
     raw = (ref_dir / "cultures.csv").read_text(encoding="utf-8-sig")
-    assert '"NIBIO GH tab.7; yield_basis/n_per_tonne ANTATT"' in raw  # untouched rows keep their quoting
+    assert '"NIBIO GH tab.7; yield_basis/n_per_tonne ANTATT, P: årlig forbruk 2 kg/daa (rådgiver)"' in raw  # untouched rows keep their quoting
 
 
 def test_save_refuses_gap(ref_dir, files):

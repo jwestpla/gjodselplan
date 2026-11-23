@@ -61,7 +61,7 @@
   it is appended once (deduplicated by file content). Non-PDF reports are listed as not attached.
 - Kartskisse PDFs are inserted as pages right after the property's Kartskisse heading (pypdf merge after build);
   the "Side x av y" footer counts inserted and appended pages. Unreadable/encrypted map PDFs print "KART MANGLER".
-- Plan PDF: Jordanalyser and Innkjøpsliste each on their own page; the journal form is one page per field
+- Plan PDF: each field in "Plan per skifte", Jordanalyser and Innkjøpsliste on their own pages; journal form one page per field
   (15 empty rows). § 27 journal: one page per field, then a "Sum for foretaket" page with a per-field summary.
 - One soil sample → many fields via field_soil_sample links (no duplicating results). After linking, the soil tab
   offers to switch draft-plan seasons that have no valid / an older sample (`plan_service.sample_plan_updates`).
@@ -80,3 +80,24 @@
   `attachments/<eid>/planer/`. A generated map satisfies the kartskisse warning; the uploaded NIBIO map follows it
   in the PDF. Network runs in a worker thread (`run_in_background`); offline gives a message. macOS python.org has
   no CA store: `farm_map._context` falls back to /etc/ssl/cert.pem. `--karttest` (workflow, continue-on-error).
+- Flyfoto from the uploaded gårdskart (v0.1.5, `gardskart.py` pure, `map_service.prepare/save_photo_map`, map
+  window): NIBIO gk_enkel (Mapfish Print, no georef) has a JPEG photo + an RGBA overlay (SMask) in the same frame
+  (read from the content stream `cm`, never hard-coded); boundary pixels are RGB (255,153,153). Scale is read
+  from "Målestokk 1: N" (varies, e.g. 1:1000). Position by Hough voting (boundary samples × pink pixels), local
+  refinement with a graded score (on line > ±1 px > ±2 px), zone 32/33/35 + ±1 % scale by score. Confident when
+  score ≥ 0.90, ≥ 150 m boundary in frame and the best rival > 10 m away is ≥ 0.08 lower; else drag-to-align.
+  Real files: 4020-178/1/0 1:4000 → UTM32, score 0.99; NIBIO prints this area in UTM32. Stored as
+  `flyfoto.jpg`/`flyfoto.json` next to the generated map; `valg.json` picks the active one (`load_cached`).
+  A new upload removes the photo map. Photo date is not in the PDF; credit names Norge i bilder via NIBIO.
+  Tests use synthetic gårdskart PDFs (`tests/conftest.make_gardskart_pdf`); never commit real ones.
+  `run_in_background` disables the cyclic GC while the worker runs (Tk objects must die on the main thread).
+- P: `p_base` = 2,0 kg/daa for all cultures = annual consumption (advisor's decision, v0.1.5; source text in
+  cultures.csv); rationale says "P: årlig forbruk 2,0 …". Still corrected by P-AL and age.
+- Plan PDF shows K as numbers only: no K part of «Beregning», no K-table notes (K-HNO₃/k_correction.csv/
+  K-korreksjon) and k_correction.csv left out of the «ikke-verifiserte normverdier» lists (filtered at render
+  time in pdf_export, so old snapshots too). The app still shows them. K-AL soil notes stay.
+- Reference CSV updates reach existing installs: `config.update_reference_files` replaces an installed file only
+  if it is byte-identical to an earlier shipped version (`gjodsel/reference_versions.SHIPPED`); the old copy goes
+  to `reference/tidligere/`, and the main window shows a note. Edited files are never overwritten. When changing a
+  file in data/reference/, add the replaced version's sha256 to SHIPPED (test_config checks the git history).
+

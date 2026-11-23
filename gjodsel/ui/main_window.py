@@ -13,7 +13,7 @@ import tkinter.font as tkfont
 from datetime import date
 from tkinter import messagebox, simpledialog, ttk
 
-from .. import __version__, plan_service, repo
+from .. import __version__, config, plan_service, repo
 from ..attachments import open_path
 from ..config import Paths
 from ..models import Settings
@@ -78,6 +78,9 @@ class MainWindow(tk.Tk):
             self.after(200, self._show_reference_errors)
         if first_start_notes and "demo" in first_start_notes:
             self.after(300, self._show_welcome)
+        updates = [n for n in first_start_notes or [] if n.startswith(config.REFERENCE_UPDATED_NOTE)]
+        if updates:
+            self.after(400, lambda: messagebox.showinfo("Referansedata", "\n\n".join(updates), parent=self))
 
     @property
     def year(self) -> int:

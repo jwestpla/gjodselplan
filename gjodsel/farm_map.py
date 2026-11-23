@@ -33,7 +33,9 @@ TOPO_WMS = ("https://wms.geonorge.no/skwms1/wms.topo", "topo")
 GREY_WMS = ("https://wms.geonorge.no/skwms1/wms.topograatone", "topograatone")
 AR5_WMS = ("https://wms.nibio.no/cgi-bin/ar5forvaltning2", "AR5flater")
 
-BACKGROUNDS = {"ar5": "AR5 over topografisk kart (gråtone)", "topo": "Topografisk kart"}
+BACKGROUNDS = {"ar5": "AR5 over topografisk kart (gråtone)", "topo": "Topografisk kart",
+               "flyfoto": "Flyfoto (fra gårdskart)"}
+GENERATED_KINDS = ("ar5", "topo")
 DEFAULT_BACKGROUND = "ar5"
 ATTRIBUTION = {
     "ar5": "Kart: © Kartverket (CC BY 4.0), arealtyper AR5: © NIBIO (NLOD 2.0). "
@@ -52,6 +54,10 @@ MARGIN = 0.12
 AR5_OPACITY = 0.55
 MAP_FILE = "kart.json"
 BACKGROUND_FILE = "bakgrunn.jpg"
+PHOTO_MAP_FILE = "flyfoto.json"  # aerial photo from the uploaded gårdskart, georeferenced (gardskart.py)
+PHOTO_FILE = "flyfoto.jpg"
+CHOICE_FILE = "valg.json"  # which of the two maps the plan uses
+GENERATED, PHOTO = "generert", "flyfoto"
 
 Getter = Callable[[str], tuple[str, bytes]]  # url -> (content type, body)
 
@@ -93,6 +99,8 @@ class FarmMap:
     fetched_at: str
     teiger: list[Teig] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    attribution: str = ""  # overrides ATTRIBUTION (the aerial photo names its own source)
+    georef: dict = field(default_factory=dict)  # aerial photo: how it was placed (gardskart.Georef + source)
 
     @property
     def epsg(self) -> int:
@@ -135,6 +143,14 @@ class FarmMap:
     def fetched_date(self) -> str:
         return self.fetched_at[:10]
 
+    def credit(self) -> str:
+        return self.attribution or ATTRIBUTION.get(self.background_kind, "")
+
+    def shifted(self, d_e: float, d_n: float) -> FarmMap:
+        """The same background moved by (d_e, d_n) metres: used when the aerial photo is aligned by hand."""
+        min_e, min_n, max_e, max_n = self.extent
+        return FarmMap.from_dict({**self.to_dict(), "extent": [min_e + d_e, min_n + d_n, max_e + d_e, max_n + d_n]})
+
 
 # --- Cache ----------------------------------------------------------------------------------------
 
@@ -143,28 +159,66 @@ def cache_dir(data_dir: Path, enterprise_id: int, property_id: int) -> Path:
     return data_dir / "kart" / str(enterprise_id) / f"eiendom_{property_id}"
 
 
-def load_cached(data_dir: Path, enterprise_id: int, property_id: int) -> FarmMap | None:
-    """The cached map of a property, or None (never fetched, or the files are damaged)."""
-    folder = cache_dir(data_dir, enterprise_id, property_id)
+def _files(which: str) -> tuple[str, str]:
+    return (PHOTO_MAP_FILE, PHOTO_FILE) if which == PHOTO else (MAP_FILE, BACKGROUND_FILE)
+
+
+def active_choice(data_dir: Path, enterprise_id: int, property_id: int) -> str:
     try:
-        fm = FarmMap.from_dict(json.loads((folder / MAP_FILE).read_text(encoding="utf-8")))
-    except (OSError, ValueError, TypeError, KeyError):
-        return None
-    return fm if (data_dir / fm.background).is_file() else None
+        data = json.loads((cache_dir(data_dir, enterprise_id, property_id) / CHOICE_FILE).read_text(encoding="utf-8"))
+        return PHOTO if data.get("active") == PHOTO else GENERATED
+    except (OSError, ValueError, AttributeError):
+        return GENERATED
 
 
-def save_cache(data_dir: Path, enterprise_id: int, property_id: int, fm: FarmMap, image: bytes) -> FarmMap:
+def set_active(data_dir: Path, enterprise_id: int, property_id: int, which: str) -> None:
     folder = cache_dir(data_dir, enterprise_id, property_id)
     folder.mkdir(parents=True, exist_ok=True)
-    background = folder / BACKGROUND_FILE
-    tmp = background.with_suffix(".tmp")
-    tmp.write_bytes(image)
-    os.replace(tmp, background)
+    (folder / CHOICE_FILE).write_text(json.dumps({"active": which}), encoding="utf-8")
+
+
+def load_cached(data_dir: Path, enterprise_id: int, property_id: int, which: str | None = None) -> FarmMap | None:
+    """The map the plan uses (or `which`: 'generert' / 'flyfoto'), or None if missing or damaged.
+
+    If the chosen aerial photo map is missing, the generated map is used.
+    """
+    folder = cache_dir(data_dir, enterprise_id, property_id)
+    wanted = which or active_choice(data_dir, enterprise_id, property_id)
+    try:
+        fm = FarmMap.from_dict(json.loads((folder / _files(wanted)[0]).read_text(encoding="utf-8")))
+        if (data_dir / fm.background).is_file():
+            return fm
+    except (OSError, ValueError, TypeError, KeyError):
+        pass
+    return load_cached(data_dir, enterprise_id, property_id, GENERATED) if which is None and wanted == PHOTO else None
+
+
+def save_cache(data_dir: Path, enterprise_id: int, property_id: int, fm: FarmMap, image: bytes | None,
+               which: str = GENERATED) -> FarmMap:
+    """Store a map (image None: keep the stored image, e.g. after aligning the photo) and make it the active one."""
+    folder = cache_dir(data_dir, enterprise_id, property_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    map_file, image_file = _files(which)
+    background = folder / image_file
+    if image is not None:
+        tmp = background.with_suffix(".tmp")
+        tmp.write_bytes(image)
+        os.replace(tmp, background)
     fm.background = background.relative_to(data_dir).as_posix()
-    tmp = folder / (MAP_FILE + ".tmp")
+    tmp = folder / (map_file + ".tmp")
     tmp.write_text(json.dumps(fm.to_dict(), ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, folder / MAP_FILE)
+    os.replace(tmp, folder / map_file)
+    set_active(data_dir, enterprise_id, property_id, which)
     return fm
+
+
+def remove_photo(data_dir: Path, enterprise_id: int, property_id: int) -> None:
+    """Forget the aerial photo map (a new gårdskart was uploaded); the generated map becomes active."""
+    folder = cache_dir(data_dir, enterprise_id, property_id)
+    for name in (PHOTO_MAP_FILE, PHOTO_FILE):
+        (folder / name).unlink(missing_ok=True)
+    if folder.is_dir():
+        set_active(data_dir, enterprise_id, property_id, GENERATED)
 
 
 def freeze(fm: FarmMap, data_dir: Path, relative_target: str) -> FarmMap:

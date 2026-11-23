@@ -114,6 +114,12 @@ def selftest() -> int:
                 **fm.to_dict(), "points": [asdict(p) for p in points], "missing_coordinates": []}}]
             map_pdf = pdf_export.export_plan(view, paths.export_dir / "selvtest_kart.pdf", paths.data_dir)
             lines.append(f"eiendomskart (uten nett): {map_pdf.stat().st_size} byte")
+            from gjodsel import gardskart
+
+            georef, error = gardskart.selftest(paths.export_dir)
+            lines.append(f"flyfoto fra gårdskart (uten nett): treff {georef.score:.0%}, avvik {error:.2f} m")
+            if not georef.confident or error > 1.0:
+                raise RuntimeError("plasseringen av flyfoto fra gårdskart virker ikke")
         from gjodsel.ui.main_window import MainWindow
 
         window = MainWindow(conn, paths, ref, [])

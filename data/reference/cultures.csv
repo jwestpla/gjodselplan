@@ -1,6 +1,6 @@
 ﻿code;name_nb;n_base;p_base;k_base;yield_basis_kg_daa;n_per_tonne;default_yield_kg_daa;source
-eple;Eple;4,0;1,5;6,0;2000;2,0;3500;NIBIO GH tab.7 + NLR Gjødsling i frukthagar 2017
-paere;Pære;6,5;1,5;7,0;2000;2,0;3500;"NIBIO GH tab.7; yield_basis/n_per_tonne ANTATT"
-sotkirsebaer;Søtkirsebær (morell);9,0;1,5;7,0;1000;2,0;1500;"NIBIO GH tab.7; yield_basis/n_per_tonne ANTATT"
-surkirsebaer;Surkirsebær;6,0;1,5;7,0;1000;2,0;1500;ANTATT
-plomme;Plomme;6,0;1,5;8,0;1500;2,0;1500;"NIBIO GH tab.7; yield_basis/n_per_tonne ANTATT"
+eple;Eple;4,0;2,0;6,0;2000;2,0;3500;NIBIO GH tab.7 + NLR Gjødsling i frukthagar 2017, P: årlig forbruk 2 kg/daa (rådgiver)
+paere;Pære;6,5;2,0;7,0;2000;2,0;3500;"NIBIO GH tab.7; yield_basis/n_per_tonne ANTATT, P: årlig forbruk 2 kg/daa (rådgiver)"
+sotkirsebaer;Søtkirsebær (morell);9,0;2,0;7,0;1000;2,0;1500;"NIBIO GH tab.7; yield_basis/n_per_tonne ANTATT, P: årlig forbruk 2 kg/daa (rådgiver)"
+surkirsebaer;Surkirsebær;6,0;2,0;7,0;1000;2,0;1500;ANTATT, P: årlig forbruk 2 kg/daa (rådgiver)
+plomme;Plomme;6,0;2,0;8,0;1500;2,0;1500;"NIBIO GH tab.7; yield_basis/n_per_tonne ANTATT, P: årlig forbruk 2 kg/daa (rådgiver)"

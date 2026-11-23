@@ -36,7 +36,7 @@ def test_01_bearing_apple(calc):
     assert warned(req, "K-HNO₃ mangler – bruker raden for 50–80")
     assert req.rationale == (
         "N: norm 4,0 + avling 2000 kg (±0) + nyvekst 20–40 cm (±0) = 4,0 kg/daa. "
-        "P: norm 1,5, P-AL 8 (4,5–9,5) ±0 % = 1,5 kg/daa. "
+        "P: årlig forbruk 1,5, P-AL 8 (4,5–9,5) ±0 % = 1,5 kg/daa. "
         "K: norm 6,0, K-AL 10, K-HNO₃ mangler (antatt 50–80) +25 % = 7,5 kg/daa."
     )
 

@@ -145,6 +145,7 @@ def test_sections_and_fields_start_on_own_pages(conn, farm, fixed_ref, settings,
               PdfReader(str(export_plan(view, tmp_path / "plan.pdf", tmp_path))).pages]
     assert "Jordanalyser" in starts and "Innkjøpsliste" in starts
     assert starts.index("Innkjøpsliste") == starts.index("Jordanalyser") + 1
+    assert starts[starts.index("Plan per skifte") + 1] == "Skifte 2 – Pærehagen"  # one page per field
     assert starts[-2:] == ["Gjødseljournal 2026 – skifte 1 Eplehagen", "Gjødseljournal 2026 – skifte 2 Pærehagen"]
 
     starts = [page.extract_text().splitlines()[0] for page in
@@ -189,3 +190,24 @@ def test_farm_report_for_standardpakke_is_appended_once(conn, farm, fixed_ref, s
     assert "Uten rapport: rapporten" not in text  # optional for Standardpakke 1
     total = len(reader.pages)
     assert f"Side 1 av {total}" in reader.pages[0].extract_text()  # appended pages are counted
+
+
+def test_potassium_shown_without_references(conn, farm, fixed_ref, settings, tmp_path):
+    from pypdf import PdfReader
+
+    e, _p, f = farm
+    # K-AL without K-HNO3: the app warns about the assumed K-HNO3 row of k_correction.csv
+    repo.save_soil_sample(conn, SoilSample(enterprise_id=e.id, sample_date="2025-04-01", p_al=8, k_al=10, ph=6.5),
+                          [f.id])
+    plan = ps.create_plan(conn, fixed_ref, settings, e.id, 2026)
+    view = ps.build_view(conn, fixed_ref, settings, plan)
+    row = view.rows[0]
+    assert "K: norm" in row.rationale and any("K-HNO₃ mangler" in w for w in row.warnings)  # still in the app
+    assert "k_correction.csv" in view.unverified
+
+    text = "".join(pg.extract_text() for pg in PdfReader(str(export_plan(view, tmp_path / "p.pdf", tmp_path))).pages)
+    for gone in ("K: norm", "K-HNO3 mangler", "k_correction.csv", "K-korreksjon"):
+        assert gone not in text, gone
+    assert "P: årlig forbruk 1,5" in text  # fixture culture (frozen PLAN values); the bundled data uses 2,0
+    assert "Planen bygger på ikke-verifiserte normverdier" in text  # other unverified rows are still listed
+    assert "Behov K" in text and "7,5" in text  # K numbers are still shown

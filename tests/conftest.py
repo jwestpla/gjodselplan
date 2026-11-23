@@ -99,3 +99,71 @@ class FakeMapNetwork:
 @pytest.fixture
 def fake_map_net():
     return FakeMapNetwork
+
+
+# --- Synthetic NIBIO gårdskart (gk_enkel-like PDF) with a known position ---------------------------------
+
+def make_gardskart_pdf(path, teiger_lonlat, centre_e, centre_n, zone=32, scale=4000, matrikkel="4640-12/3/0",
+                       printed="01.04.2026", decoys=True):
+    """A4 page like NIBIO's gårdskart: a JPEG 'photo' and a transparent overlay (SMask) with the property
+    boundary in pink, drawn so that the map frame is centred on (centre_e, centre_n) in UTM `zone`.
+    Image names and sizes come from reportlab, not from the real files."""
+    import io
+    import random
+
+    from PIL import Image, ImageDraw
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen.canvas import Canvas
+
+    from gjodsel.geo import wgs84_to_utm
+
+    photo_rect = (20, 206.58, 555, 615.42)
+    overlay_rect = (20, 206.13, 555, 615.87)
+    overlay_px = (1003, 1113)
+    m_per_pt = scale / (72 / 0.0254)
+    e0 = centre_e - overlay_rect[2] / 2 * m_per_pt
+    n0 = centre_n + overlay_rect[3] / 2 * m_per_pt
+    mx = m_per_pt * overlay_rect[2] / overlay_px[0]
+    my = m_per_pt * overlay_rect[3] / overlay_px[1]
+
+    rng = random.Random(7)
+    photo = Image.new("RGB", (1185, 1314))
+    draw = ImageDraw.Draw(photo)
+    for _ in range(400):  # fields and noise, so the photo is not empty
+        x, y = rng.randrange(1185), rng.randrange(1314)
+        draw.rectangle([x, y, x + rng.randrange(20, 160), y + rng.randrange(20, 160)],
+                       fill=(rng.randrange(60, 200), rng.randrange(90, 210), rng.randrange(40, 140)))
+    photo_file = Path(path).with_suffix(".photo.jpg")
+    photo.save(photo_file, "JPEG", quality=80)
+
+    overlay = Image.new("RGBA", overlay_px, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    if decoys:
+        for _ in range(12):  # AR5 lines in yellow, labels, the driftssenter dot
+            draw.line([(rng.randrange(1003), rng.randrange(1113)), (rng.randrange(1003), rng.randrange(1113))],
+                      fill=(255, 255, 0, 220), width=2)
+        draw.ellipse([495, 550, 505, 560], fill=(255, 0, 0, 255))
+        draw.text((520, 540), "178/1", fill=(0, 0, 0, 255))
+    for rings, *_ in teiger_lonlat:
+        for ring in rings:
+            pts = [((e - e0) / mx, (n0 - n) / my) for e, n in (wgs84_to_utm(lat, lon, zone) for lon, lat, *_ in ring)]
+            draw.line(pts, fill=(255, 153, 153, 255), width=3)
+
+    canvas = Canvas(str(path), pagesize=(595, 842))
+    canvas.drawImage(str(photo_file), *photo_rect)
+    buffer = io.BytesIO()
+    overlay.save(buffer, "PNG")
+    canvas.drawImage(ImageReader(io.BytesIO(buffer.getvalue())), *overlay_rect, mask="auto")
+    canvas.setFont("Helvetica", 9)
+    canvas.drawString(30, 160, "Målestokk 1: %d ved A4 utskrift" % scale)
+    canvas.drawString(30, 148, f"Utskriftsdato: {printed} 10:00")
+    canvas.setFont("Helvetica-Bold", 14)
+    canvas.drawString(30, 120, f"GÅRDSKART  {matrikkel}")
+    canvas.save()
+    photo_file.unlink()
+    return path
+
+
+@pytest.fixture
+def gardskart_pdf():
+    return make_gardskart_pdf

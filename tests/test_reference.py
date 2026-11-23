@@ -47,7 +47,7 @@ def test_decimal_comma_and_quoted_source_parsed():
     ref = load_reference(REFERENCE_DIR)
     paere = ref.cultures["paere"]
     assert paere.n_base == 6.5
-    assert paere.source == "NIBIO GH tab.7; yield_basis/n_per_tonne ANTATT"
+    assert paere.source == "NIBIO GH tab.7; yield_basis/n_per_tonne ANTATT, P: årlig forbruk 2 kg/daa (rådgiver)"
     assert ref.products["multi_k_mg"].k == 35.7
     assert ref.products["fg_12_4_18"].mg is None  # empty = unknown, not 0
 
@@ -177,8 +177,8 @@ def test_required_value_missing(ref_dir):
 
 
 def test_unquoted_semicolon_in_source(ref_dir):
-    edit(ref_dir, "cultures.csv", '"NIBIO GH tab.7; yield_basis/n_per_tonne ANTATT"',
-         "NIBIO GH tab.7; yield_basis/n_per_tonne ANTATT")
+    edit(ref_dir, "cultures.csv", '"NIBIO GH tab.7; yield_basis/n_per_tonne ANTATT, P: årlig forbruk 2 kg/daa (rådgiver)"',
+         "NIBIO GH tab.7; yield_basis/n_per_tonne ANTATT, P: årlig forbruk 2 kg/daa (rådgiver)")
     assert_error(load_errors(ref_dir), "cultures.csv linje 3", "for mange felt")
 
 
